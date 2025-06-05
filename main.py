@@ -134,4 +134,10 @@ async def main():
 
 if __name__ == '__main__':
     import asyncio
-    asyncio.run(main()) 
+    import os
+
+    # Если скрипт запущен в GitHub Actions, выполняем только разовую проверку напоминаний
+    if os.environ.get('GITHUB_ACTIONS') == 'true':
+        asyncio.run(check_reminders())
+    else:
+        asyncio.run(main()) 
