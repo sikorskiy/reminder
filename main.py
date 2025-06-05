@@ -5,7 +5,7 @@ from datetime import datetime
 import pandas as pd
 import pytz
 from dotenv import load_dotenv
-from telegram.ext import Application
+import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+
+# Проверка токена
+logger.info(f"Используемый токен: {TELEGRAM_TOKEN}")
 
 # Пути к файлам
 REMINDERS_FILE = 'reminders.csv'
@@ -49,10 +52,26 @@ def load_reminders():
 async def send_reminder(reminder_id, text):
     """Отправка напоминания в Telegram"""
     try:
-        application = Application.builder().token(TELEGRAM_TOKEN).build()
-        await application.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text)
-        logger.info(f"Отправлено напоминание: {text}")
-        return True
+        # Очищаем токен от возможных лишних символов
+        clean_token = TELEGRAM_TOKEN.strip()
+        url = f"https://api.telegram.org/bot{clean_token}/sendMessage"
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url,
+                json={
+                    "chat_id": TELEGRAM_CHAT_ID,
+                    "text": text
+                }
+            )
+            
+            if response.status_code == 200:
+                logger.info(f"Отправлено напоминание: {text}")
+                return True
+            else:
+                logger.error(f"Ошибка при отправке: {response.text}")
+                return False
+                
     except Exception as e:
         logger.error(f"Ошибка при отправке напоминания: {e}")
         return False
