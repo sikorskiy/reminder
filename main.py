@@ -95,10 +95,14 @@ async def check_reminders():
             except pytz.exceptions.UnknownTimeZoneError:
                 logger.warning(f"Неизвестный часовой пояс '{row['timezone']}', используем {DEFAULT_TIMEZONE}")
                 timezone = pytz.timezone(DEFAULT_TIMEZONE)
-                
-            reminder_time = row['datetime'].tz_localize(timezone)
+
+            # Исправленная обработка временной зоны
+            if row['datetime'].tzinfo is None or row['datetime'].tzinfo.utcoffset(row['datetime']) is None:
+                reminder_time = row['datetime'].tz_localize(timezone)
+            else:
+                reminder_time = row['datetime'].tz_convert(timezone)
             reminder_time_utc = reminder_time.astimezone(pytz.UTC)
-            
+
             if current_time >= reminder_time_utc:
                 success = await send_reminder(reminder_id, row['text'])
                 if success:
