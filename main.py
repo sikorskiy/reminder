@@ -24,6 +24,7 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 # Пути к файлам
 REMINDERS_FILE = 'reminders.csv'
 SENT_LOG_FILE = 'sent_log.json'
+DEFAULT_TIMEZONE = 'Europe/Moscow'
 
 def load_sent_log():
     """Загрузка журнала отправленных напоминаний"""
@@ -41,7 +42,8 @@ def load_reminders():
     """Загрузка напоминаний из CSV файла"""
     df = pd.read_csv(REMINDERS_FILE)
     df['datetime'] = pd.to_datetime(df['datetime'])
-    df['timezone'] = df['timezone'].fillna('Europe/Moscow')
+    # Заменяем все пустые значения и пробелы на московский часовой пояс
+    df['timezone'] = df['timezone'].fillna(DEFAULT_TIMEZONE).replace('', DEFAULT_TIMEZONE).str.strip()
     return df
 
 async def send_reminder(reminder_id, text):
@@ -67,14 +69,24 @@ async def check_reminders():
         if reminder_id in sent_log:
             continue
             
-        reminder_time = row['datetime'].tz_localize(row['timezone'])
-        reminder_time_utc = reminder_time.astimezone(pytz.UTC)
-        
-        if current_time >= reminder_time_utc:
-            success = await send_reminder(reminder_id, row['text'])
-            if success:
-                sent_log.append(reminder_id)
-                save_sent_log(sent_log)
+        try:
+            # Используем московский часовой пояс, если указанный невалидный
+            try:
+                timezone = pytz.timezone(row['timezone'])
+            except pytz.exceptions.UnknownTimeZoneError:
+                logger.warning(f"Неизвестный часовой пояс '{row['timezone']}', используем {DEFAULT_TIMEZONE}")
+                timezone = pytz.timezone(DEFAULT_TIMEZONE)
+                
+            reminder_time = row['datetime'].tz_localize(timezone)
+            reminder_time_utc = reminder_time.astimezone(pytz.UTC)
+            
+            if current_time >= reminder_time_utc:
+                success = await send_reminder(reminder_id, row['text'])
+                if success:
+                    sent_log.append(reminder_id)
+                    save_sent_log(sent_log)
+        except Exception as e:
+            logger.error(f"Ошибка при обработке напоминания {reminder_id}: {e}")
 
 async def main():
     """Основная функция"""
