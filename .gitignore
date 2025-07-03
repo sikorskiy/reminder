@@ -1,11 +1,40 @@
 # 🔐 Ignore sensitive files
 .env
 *.json
+finagent-*.json
 
 # 🐍 Python stuff
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
 
-# 🧪 venv and logs
+# 🧪 Virtual environments
 venv/
+env/
+ENV/
+
+# 📝 Logs
 *.log
+logs/
+
+# 🔧 IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 🗂️ OS
+.DS_Store
+Thumbs.db
+
+# 📦 Distribution
+dist/
+build/
+*.egg-info/

@@ -30,4 +30,25 @@ class GoogleSheetsReminder:
 
     def mark_as_sent(self, row):
         """Отмечает напоминание как отправленное по номеру строки."""
-        self.ws.update_cell(row, 4, 'TRUE')  # 4 — номер колонки 'sent' 
+        self.ws.update_cell(row, 4, 'TRUE')  # 4 — номер колонки 'sent'
+        
+    def add_reminder(self, datetime_str: str, text: str, timezone: str = 'Europe/Moscow'):
+        """
+        Добавляет новое напоминание в таблицу
+        
+        Args:
+            datetime_str: Дата и время в формате YYYY-MM-DD HH:MM:SS
+            text: Текст напоминания
+            timezone: Часовой пояс (по умолчанию Europe/Moscow)
+            
+        Returns:
+            bool: True если успешно добавлено, False в случае ошибки
+        """
+        try:
+            # Добавляем новую строку в конец таблицы
+            new_row = [datetime_str, text, timezone, 'FALSE']  # FALSE означает "не отправлено"
+            self.ws.append_row(new_row)
+            return True
+        except Exception as e:
+            print(f"Ошибка при добавлении напоминания: {e}")
+            return False 

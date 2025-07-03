@@ -8,6 +8,9 @@ import pandas as pd
 from google_sheets import GoogleSheetsReminder
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from telegram_bot import ReminderBot
+import asyncio
+from typing import Optional
 
 # Настройка логирования
 logging.basicConfig(
@@ -20,17 +23,18 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
-# ВАЖНО: GS_SPREADSHEET — это название вашей Google Таблицы, как оно отображается в Google Drive (например, 'ReminderBotData').
+# Конфигурация Google Sheets
 GS_CREDS = 'finagent-461009-8c1e97a2ff0c.json'
-GS_SPREADSHEET = 'reminders'  # пример: название таблицы в Google Drive
-GS_WORKSHEET = 'reminders'  # имя листа
-
-gs = GoogleSheetsReminder(GS_CREDS, GS_SPREADSHEET, GS_WORKSHEET)
-
+GS_SPREADSHEET = 'reminders'
+GS_WORKSHEET = 'reminders'
 DEFAULT_TIMEZONE = 'Europe/Moscow'
 
-async def send_reminder(reminder_id, text):
+# Инициализация Google Sheets
+gs = GoogleSheetsReminder(GS_CREDS, GS_SPREADSHEET, GS_WORKSHEET)
+
+async def send_reminder(reminder_id: str, text: str) -> bool:
     """Отправка напоминания в Telegram"""
     try:
         clean_token = TELEGRAM_TOKEN.strip()
@@ -53,33 +57,56 @@ async def send_reminder(reminder_id, text):
         logger.error(f"Ошибка при отправке напоминания: {e}")
         return False
 
-async def check_reminders():
+async def check_reminders() -> None:
     """Проверка и отправка напоминаний из Google Sheets"""
     reminders = gs.get_reminders()
     current_time = datetime.now(pytz.UTC)
+    
     for reminder in reminders:
         reminder_id = f"{reminder['datetime']}_{reminder['text']}"
         try:
+            # Обработка часового пояса
+            timezone_str = reminder.get('timezone') or DEFAULT_TIMEZONE
             try:
-                timezone = pytz.timezone(reminder['timezone']) if reminder['timezone'] else pytz.timezone(DEFAULT_TIMEZONE)
+                timezone = pytz.timezone(timezone_str)
             except pytz.exceptions.UnknownTimeZoneError:
-                logger.warning(f"Неизвестный часовой пояс '{reminder['timezone']}', используем {DEFAULT_TIMEZONE}")
+                logger.warning(f"Неизвестный часовой пояс '{timezone_str}', используем {DEFAULT_TIMEZONE}")
                 timezone = pytz.timezone(DEFAULT_TIMEZONE)
+            
+            # Парсинг и конвертация времени
             dt = pd.to_datetime(reminder['datetime'])
             if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
                 reminder_time = dt.tz_localize(timezone)
             else:
                 reminder_time = dt.tz_convert(timezone)
+            
             reminder_time_utc = reminder_time.astimezone(pytz.UTC)
+            
+            # Проверка времени и отправка
             if current_time >= reminder_time_utc:
                 success = await send_reminder(reminder_id, reminder['text'])
                 if success:
                     gs.mark_as_sent(reminder['row'])
+                    
         except Exception as e:
             logger.error(f"Ошибка при обработке напоминания {reminder_id}: {e}")
 
-async def main():
+async def main() -> None:
     """Основная функция"""
+    # Проверка переменных окружения
+    if not all([TELEGRAM_TOKEN, OPENAI_API_KEY]):
+        missing = []
+        if not TELEGRAM_TOKEN:
+            missing.append('TELEGRAM_TOKEN')
+        if not OPENAI_API_KEY:
+            missing.append('OPENAI_API_KEY')
+        logger.error(f"Отсутствуют необходимые переменные окружения: {', '.join(missing)}")
+        return
+        
+    # Создание и запуск компонентов
+    bot = ReminderBot(TELEGRAM_TOKEN, OPENAI_API_KEY, gs)
+    
+    # Настройка планировщика
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
         check_reminders,
@@ -88,12 +115,21 @@ async def main():
         replace_existing=True
     )
     scheduler.start()
+    logger.info("Планировщик напоминаний запущен")
+    
+    # Запуск бота
+    logger.info("Telegram бот запущен")
+    
     try:
-        while True:
-            await asyncio.sleep(1)
-    except (KeyboardInterrupt, SystemExit):
+        bot_task = asyncio.create_task(bot.run_async())
+        await bot_task
+    except KeyboardInterrupt:
+        logger.info("Получен сигнал завершения...")
+    except Exception as e:
+        logger.error(f"Ошибка в main: {e}")
+    finally:
         scheduler.shutdown()
+        logger.info("Работа завершена")
 
 if __name__ == '__main__':
-    import asyncio
     asyncio.run(main()) 
