@@ -1,0 +1,11 @@
+# 🔐 Ignore sensitive files
+.env
+*.json
+
+# 🐍 Python stuff
+__pycache__/
+*.pyc
+
+# 🧪 venv and logs
+venv/
+*.log
