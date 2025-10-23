@@ -235,6 +235,7 @@ class ReminderBot:
                 return
                 
             # Добавляем напоминание в Google Sheets с комментарием
+            logger.info(f"Добавляем напоминание с комментарием: '{second_message}'")
             row_number = self.google_sheets.add_reminder(
                 datetime_str=reminder_info.get('datetime'),  # Может быть None
                 text=reminder_info['text'],
