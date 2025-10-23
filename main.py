@@ -34,25 +34,61 @@ DEFAULT_TIMEZONE = 'Europe/Moscow'
 # Инициализация Google Sheets
 gs = GoogleSheetsReminder(GS_CREDS, GS_SPREADSHEET, GS_WORKSHEET)
 
-async def send_reminder(reminder_id: str, text: str) -> bool:
+# Глобальная переменная для хранения объекта бота
+bot_instance = None
+
+async def send_reminder(reminder_id: str, text: str, reminder_row: int = None) -> bool:
     """Отправка напоминания в Telegram"""
     try:
-        clean_token = TELEGRAM_TOKEN.strip()
-        url = f"https://api.telegram.org/bot{clean_token}/sendMessage"
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url,
-                json={
-                    "chat_id": TELEGRAM_CHAT_ID,
-                    "text": text
-                }
+        if bot_instance:
+            # Отправляем через объект бота с кнопками
+            from telegram import Bot
+            from inline_buttons import InlineButtonManager
+            
+            bot = Bot(TELEGRAM_TOKEN)
+            inline_manager = InlineButtonManager(bot)
+            
+            # Создаем сообщение с кнопками
+            keyboard = inline_manager.create_reminder_buttons()
+            
+            message = await bot.send_message(
+                chat_id=TELEGRAM_CHAT_ID,
+                text=f"🔔 <b>Напоминание:</b>\n\n{text}",
+                parse_mode='HTML',
+                reply_markup=keyboard
             )
-            if response.status_code == 200:
-                logger.info(f"Отправлено напоминание: {text}")
-                return True
-            else:
-                logger.error(f"Ошибка при отправке: {response.text}")
-                return False
+            
+            # Сохраняем информацию о напоминании для обработки кнопок
+            if reminder_row and bot_instance.inline_button_handler:
+                reminder_data = {
+                    'row': reminder_row,
+                    'text': text,
+                    'datetime': None,  # Время уже прошло
+                    'timezone': DEFAULT_TIMEZONE
+                }
+                # Используем chat_id как user_id для групповых чатов
+                bot_instance.inline_button_handler.set_last_reminder(int(TELEGRAM_CHAT_ID), reminder_data)
+            
+            logger.info(f"Отправлено напоминание с кнопками: {text}")
+            return True
+        else:
+            # Fallback: отправляем через HTTP API без кнопок
+            clean_token = TELEGRAM_TOKEN.strip()
+            url = f"https://api.telegram.org/bot{clean_token}/sendMessage"
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    url,
+                    json={
+                        "chat_id": TELEGRAM_CHAT_ID,
+                        "text": f"🔔 Напоминание:\n\n{text}"
+                    }
+                )
+                if response.status_code == 200:
+                    logger.info(f"Отправлено напоминание: {text}")
+                    return True
+                else:
+                    logger.error(f"Ошибка при отправке: {response.text}")
+                    return False
     except Exception as e:
         logger.error(f"Ошибка при отправке напоминания: {e}")
         return False
@@ -84,7 +120,7 @@ async def check_reminders() -> None:
             
             # Проверка времени и отправка
             if current_time >= reminder_time_utc:
-                success = await send_reminder(reminder_id, reminder['text'])
+                success = await send_reminder(reminder_id, reminder['text'], reminder['row'])
                 if success:
                     gs.mark_as_sent(reminder['row'])
                     
@@ -105,6 +141,10 @@ async def main() -> None:
         
     # Создание и запуск компонентов
     bot = ReminderBot(TELEGRAM_TOKEN, OPENAI_API_KEY, gs)
+    
+    # Устанавливаем глобальную переменную для использования в планировщике
+    global bot_instance
+    bot_instance = bot
     
     # Настройка планировщика
     scheduler = AsyncIOScheduler()

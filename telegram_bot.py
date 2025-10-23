@@ -171,9 +171,7 @@ class ReminderBot:
                     f"🔔 Вы получите уведомление в указанное время."
                 )
                 
-                # Добавляем inline-кнопки к сообщению
-                keyboard = self.inline_button_manager.create_reminder_buttons()
-                await processing_message.edit_text(success_message, parse_mode='HTML', reply_markup=keyboard)
+                await processing_message.edit_text(success_message, parse_mode='HTML')
             else:
                 await processing_message.edit_text("❌ Ошибка при сохранении напоминания. Попробуйте позже.")
                 
@@ -269,9 +267,7 @@ class ReminderBot:
                     f"🔔 Вы получите уведомление в указанное время."
                 )
                 
-                # Добавляем inline-кнопки к сообщению
-                keyboard = self.inline_button_manager.create_reminder_buttons()
-                await processing_message.edit_text(success_message, parse_mode='HTML', reply_markup=keyboard)
+                await processing_message.edit_text(success_message, parse_mode='HTML')
             else:
                 await processing_message.edit_text("❌ Ошибка при сохранении напоминания. Попробуйте позже.")
                 
