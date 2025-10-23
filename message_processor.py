@@ -1,7 +1,7 @@
 import os
 import logging
 import openai
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from typing import Dict, Optional, Tuple
 
@@ -38,7 +38,7 @@ class MessageProcessor:
             1. Текст напоминания (что нужно напомнить). Важно, чтобы ты писал напоминание с большой буквы, а также описывал именно суть действия, не просто слова "напомнить что-тот там в конкретное время". К примеру, "Напомни мне зарегистрироваться на марафон завтра": суть напоминания это "Зарегистрироваться на марафон"
             2. Дата и время (в формате YYYY-MM-DD HH:MM:SS) - РАССЧИТЫВАЙ ОТНОСИТЕЛЬНО ТЕКУЩЕЙ ДАТЫ и времени.
             3. Часовой пояс (если указан, иначе используй Europe/Moscow)
-            4. Если не указывается дата и время, то используй текущую дату и время.
+            4. Если в сообщении НЕТ четкой информации о времени (например, "напомни про что-то" без указания когда), то верни null для datetime.
             
             ВАЖНО: Всегда рассчитывай время относительно текущей даты {current_time_str}.
             
@@ -49,6 +49,7 @@ class MessageProcessor:
             - "завтра в 15:00" = завтра в 15:00
             - "в пятницу в 14:30" = ближайшая пятница в 14:30
             - "через 30 минут" = текущее время + 30 минут
+            - "напомни про встречу" = null (нет времени)
             
             ВОЗВРАЩАЙ JSON С КЛЮЧАМИ НА АНГЛИЙСКОМ:
             {{"text": "текст напоминания", "datetime": "YYYY-MM-DD HH:MM:SS", "timezone": "Europe/Moscow"}}
@@ -119,8 +120,10 @@ class MessageProcessor:
                 
             try:
                 dt = datetime.strptime(datetime_str, '%Y-%m-%d %H:%M:%S')
-                # Проверяем, что время не в прошлом
-                if dt < datetime.now():
+                # Проверяем, что время не в прошлом (с буфером в 1 минуту)
+                current_time = datetime.now()
+                time_buffer = timedelta(minutes=1)
+                if dt < (current_time - time_buffer):
                     return False, "Время напоминания не может быть в прошлом"
             except ValueError:
                 return False, "Неверный формат даты и времени"
