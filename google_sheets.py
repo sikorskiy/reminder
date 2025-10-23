@@ -108,4 +108,23 @@ class GoogleSheetsReminder:
             return row_number
         except Exception as e:
             print(f"Ошибка при добавлении напоминания: {e}")
-            return None 
+            return None
+    
+    def update_reminder_comment(self, row, comment):
+        """
+        Обновляет комментарий напоминания в шестом столбце
+        
+        Args:
+            row: Номер строки в таблице
+            comment: Новый комментарий
+            
+        Returns:
+            bool: True если успешно обновлено, False в случае ошибки
+        """
+        try:
+            # Обновляем шестой столбец (колонка 6)
+            self.ws.update_cell(row, 6, comment)
+            return True
+        except Exception as e:
+            print(f"Ошибка при обновлении комментария напоминания: {e}")
+            return False 

@@ -33,6 +33,12 @@ class ReminderBot:
         # Инициализируем менеджер inline-кнопок
         self.inline_button_manager = InlineButtonManager(self.application.bot)
         
+        # Временное хранение поясняющих сообщений для ожидания пересылаемых
+        self.pending_explanatory_messages = {}  # {user_id: {'message': explanatory_message, 'timestamp': time}}
+        
+        # Таймаут для ожидания пересылаемых сообщений (в секундах)
+        self.FORWARDED_MESSAGE_TIMEOUT = 300  # 5 минут
+        
         # Добавляем обработчики
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("help", self.help_command))
@@ -43,6 +49,20 @@ class ReminderBot:
         self.application.add_handler(MessageHandler(filters.FORWARDED, self.handle_forwarded_message))
         # Обработчик для inline-кнопок
         self.application.add_handler(CallbackQueryHandler(self.handle_callback_query))
+    
+    def cleanup_expired_pending_messages(self):
+        """Очищает устаревшие ожидающие поясняющие сообщения"""
+        import time
+        current_time = time.time()
+        expired_users = []
+        
+        for user_id, data in self.pending_explanatory_messages.items():
+            if current_time - data['timestamp'] > self.FORWARDED_MESSAGE_TIMEOUT:
+                expired_users.append(user_id)
+        
+        for user_id in expired_users:
+            del self.pending_explanatory_messages[user_id]
+            logger.info(f"Очищено устаревшее ожидающее сообщение для пользователя {user_id}")
         
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start"""
@@ -103,6 +123,14 @@ class ReminderBot:
         
         logger.info(f"Получено сообщение от пользователя {user_id}: {user_message}")
         
+        # Очищаем устаревшие ожидающие сообщения
+        self.cleanup_expired_pending_messages()
+        
+        # Проверяем, есть ли ожидающее поясняющее сообщение для этого пользователя
+        if user_id in self.pending_explanatory_messages:
+            # Очищаем ожидающее сообщение (возможно, пользователь передумал)
+            del self.pending_explanatory_messages[user_id]
+        
         # Отправляем сообщение о том, что обрабатываем
         processing_message = await update.message.reply_text("🤔 Обрабатываю ваше сообщение...")
         
@@ -151,11 +179,19 @@ class ReminderBot:
                 # Сохраняем информацию о последнем напоминании для кнопок
                 reminder_data = {
                     'row': row_number,
-                    'datetime': reminder_info['datetime'],
+                    'datetime': reminder_info.get('datetime'),  # Может быть None
                     'text': reminder_info['text'],
                     'timezone': reminder_info.get('timezone', 'Europe/Moscow')
                 }
                 self.inline_button_handler.set_last_reminder(user_id, reminder_data)
+                
+                # Сохраняем поясняющее сообщение для возможного пересылаемого сообщения
+                import time
+                self.pending_explanatory_messages[user_id] = {
+                    'message': user_message,
+                    'reminder_data': reminder_data,
+                    'timestamp': time.time()
+                }
                 
                 # Форматируем время для отображения
                 from datetime import datetime
@@ -316,6 +352,9 @@ class ReminderBot:
         
         logger.info(f"Получено пересылаемое сообщение от пользователя {user_id}")
         
+        # Очищаем устаревшие ожидающие сообщения
+        self.cleanup_expired_pending_messages()
+        
         # Отправляем сообщение о том, что обрабатываем
         processing_message = await update.message.reply_text("📎 Обрабатываю пересылаемое сообщение...")
         
@@ -323,12 +362,35 @@ class ReminderBot:
             # Получаем текст пересылаемого сообщения
             forwarded_text = forwarded_message.text or forwarded_message.caption or "Пересланное сообщение без текста"
             
-            # Проверяем, есть ли поясняющее сообщение (следующее сообщение от того же пользователя)
-            # Для этого нужно проверить контекст или использовать другой подход
+            # Проверяем, есть ли ожидающее поясняющее сообщение для этого пользователя
+            if user_id in self.pending_explanatory_messages:
+                # Есть ожидающее поясняющее сообщение - объединяем их
+                explanatory_data = self.pending_explanatory_messages[user_id]
+                explanatory_message = explanatory_data['message']
+                reminder_data = explanatory_data['reminder_data']
+                
+                # Обновляем напоминание с комментарием
+                success = self.google_sheets.update_reminder_comment(reminder_data['row'], forwarded_text)
+                
+                if success:
+                    # Очищаем ожидающее сообщение
+                    del self.pending_explanatory_messages[user_id]
+                    
+                    # Формируем сообщение об успехе
+                    success_message = (
+                        f"✅ <b>Напоминание обновлено с пересылаемым сообщением!</b>\n\n"
+                        f"📝 <b>Текст напоминания:</b> {reminder_data['text']}\n"
+                        f"📎 <b>Пересланное сообщение:</b> {forwarded_text[:100]}{'...' if len(forwarded_text) > 100 else ''}\n\n"
+                        f"🔔 Напоминание будет отправлено в указанное время с пересылаемым сообщением."
+                    )
+                    
+                    await processing_message.edit_text(success_message, parse_mode='HTML')
+                    return
+                else:
+                    await processing_message.edit_text("❌ Ошибка при обновлении напоминания. Попробуйте позже.")
+                    return
             
-            # Пока что обрабатываем как обычное сообщение
-            # В будущем можно добавить логику для ожидания поясняющего сообщения
-            
+            # Нет ожидающего поясняющего сообщения - обрабатываем как обычное напоминание
             # Извлекаем информацию о напоминании с помощью ChatGPT
             reminder_info = self.message_processor.extract_reminder_info(forwarded_text)
             
