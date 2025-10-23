@@ -124,7 +124,15 @@ class ReminderBot:
             is_valid, error_message = self.message_processor.validate_reminder_info(reminder_info)
             
             if not is_valid:
-                await processing_message.edit_text(f"❌ Ошибка: {error_message}")
+                logger.warning(f"Ошибка валидации для пользователя {user_id}: {error_message}")
+                logger.warning(f"Данные напоминания: {reminder_info}")
+                await processing_message.edit_text(
+                    f"❌ Ошибка: {error_message}\n\n"
+                    f"💡 Попробуйте указать конкретное время, например:\n"
+                    f"• \"Напомни мне завтра в 15:00 о встрече\"\n"
+                    f"• \"Купить хлеб через 2 часа\"\n"
+                    f"• \"Позвонить маме в субботу в 10 утра\""
+                )
                 return
                 
             # Добавляем напоминание в Google Sheets
@@ -217,7 +225,15 @@ class ReminderBot:
             is_valid, error_message = self.message_processor.validate_reminder_info(reminder_info)
             
             if not is_valid:
-                await processing_message.edit_text(f"❌ Ошибка: {error_message}")
+                logger.warning(f"Ошибка валидации для пользователя {user_id}: {error_message}")
+                logger.warning(f"Данные напоминания: {reminder_info}")
+                await processing_message.edit_text(
+                    f"❌ Ошибка: {error_message}\n\n"
+                    f"💡 Попробуйте указать конкретное время, например:\n"
+                    f"• \"Напомни мне завтра в 15:00 о встрече\"\n"
+                    f"• \"Купить хлеб через 2 часа\"\n"
+                    f"• \"Позвонить маме в субботу в 10 утра\""
+                )
                 return
                 
             # Добавляем напоминание в Google Sheets
