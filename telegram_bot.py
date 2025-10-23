@@ -39,6 +39,8 @@ class ReminderBot:
         self.application.add_handler(CommandHandler("buttons", self.buttons_command))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         self.application.add_handler(MessageHandler(filters.VOICE, self.handle_voice_message))
+        # Обработчик для пересылаемых сообщений
+        self.application.add_handler(MessageHandler(filters.FORWARDED, self.handle_forwarded_message))
         # Обработчик для inline-кнопок
         self.application.add_handler(CallbackQueryHandler(self.handle_callback_query))
         
@@ -141,7 +143,8 @@ class ReminderBot:
             row_number = self.google_sheets.add_reminder(
                 datetime_str=reminder_info['datetime'],
                 text=reminder_info['text'],
-                timezone=reminder_info.get('timezone', 'Europe/Moscow')
+                timezone=reminder_info.get('timezone', 'Europe/Moscow'),
+                comment=''  # Пустой комментарий для обычных сообщений
             )
             
             if row_number:
@@ -293,6 +296,96 @@ class ReminderBot:
         except Exception as e:
             logger.error(f"Ошибка при обработке callback: {e}")
             await update.callback_query.answer("❌ Произошла ошибка при обработке действия.")
+    
+    async def handle_forwarded_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик пересылаемых сообщений"""
+        user_id = update.effective_user.id
+        forwarded_message = update.message
+        
+        logger.info(f"Получено пересылаемое сообщение от пользователя {user_id}")
+        
+        # Отправляем сообщение о том, что обрабатываем
+        processing_message = await update.message.reply_text("📎 Обрабатываю пересылаемое сообщение...")
+        
+        try:
+            # Получаем текст пересылаемого сообщения
+            forwarded_text = forwarded_message.text or forwarded_message.caption or "Пересланное сообщение без текста"
+            
+            # Проверяем, есть ли поясняющее сообщение (следующее сообщение от того же пользователя)
+            # Для этого нужно проверить контекст или использовать другой подход
+            
+            # Пока что обрабатываем как обычное сообщение
+            # В будущем можно добавить логику для ожидания поясняющего сообщения
+            
+            # Извлекаем информацию о напоминании с помощью ChatGPT
+            reminder_info = self.message_processor.extract_reminder_info(forwarded_text)
+            
+            if reminder_info is None:
+                await processing_message.edit_text(
+                    f"❌ Не удалось распознать напоминание в пересылаемом сообщении:\n<i>{forwarded_text}</i>\n\n"
+                    "Попробуйте добавить поясняющее сообщение с указанием времени.",
+                    parse_mode='HTML'
+                )
+                return
+                
+            # Валидируем информацию
+            is_valid, error_message = self.message_processor.validate_reminder_info(reminder_info)
+            
+            if not is_valid:
+                logger.warning(f"Ошибка валидации для пользователя {user_id}: {error_message}")
+                await processing_message.edit_text(
+                    f"🤔 <b>Не удалось создать напоминание</b>\n\n"
+                    f"<i>Причина:</i> {error_message}\n\n"
+                    f"💡 <b>Попробуйте добавить поясняющее сообщение с указанием времени.</b>",
+                    parse_mode='HTML'
+                )
+                return
+                
+            # Добавляем напоминание в Google Sheets с комментарием
+            row_number = self.google_sheets.add_reminder(
+                datetime_str=reminder_info['datetime'],
+                text=reminder_info['text'],
+                timezone=reminder_info.get('timezone', 'Europe/Moscow'),
+                comment=forwarded_text  # Пересылаемое сообщение как комментарий
+            )
+            
+            if row_number:
+                # Сохраняем информацию о последнем напоминании для кнопок
+                reminder_data = {
+                    'row': row_number,
+                    'datetime': reminder_info['datetime'],
+                    'text': reminder_info['text'],
+                    'timezone': reminder_info.get('timezone', 'Europe/Moscow')
+                }
+                self.inline_button_handler.set_last_reminder(user_id, reminder_data)
+                
+                # Форматируем время для отображения
+                from datetime import datetime
+                dt = datetime.strptime(reminder_info['datetime'], '%Y-%m-%d %H:%M:%S')
+                formatted_time = dt.strftime('%d.%m.%Y в %H:%M')
+                timezone = reminder_info.get('timezone', 'Europe/Moscow')
+                text = reminder_info['text']
+                
+                success_message = (
+                    f"✅ <b>Напоминание добавлено из пересылаемого сообщения!</b>\n\n"
+                    f"📎 <b>Пересланное сообщение:</b> {forwarded_text[:100]}{'...' if len(forwarded_text) > 100 else ''}\n\n"
+                    f"📝 <b>Текст напоминания:</b> {text}\n"
+                    f"⏰ <b>Время:</b> {formatted_time}\n"
+                    f"🌍 <b>Часовой пояс:</b> {timezone}\n\n"
+                    f"📊 <i>Строка в таблице:</i>\n"
+                    f"<code>{reminder_info['datetime']} | {text} | {timezone} | FALSE | | {forwarded_text[:50]}...</code>\n\n"
+                    f"🔔 Вы получите уведомление в указанное время."
+                )
+                
+                await processing_message.edit_text(success_message, parse_mode='HTML')
+            else:
+                await processing_message.edit_text("❌ Ошибка при сохранении напоминания. Попробуйте позже.")
+                
+        except Exception as e:
+            logger.error(f"Ошибка при обработке пересылаемого сообщения: {e}")
+            await processing_message.edit_text(
+                "❌ Произошла ошибка при обработке пересылаемого сообщения. Попробуйте позже."
+            )
             
     def run(self):
         """Запуск бота"""

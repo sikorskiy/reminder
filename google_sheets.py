@@ -25,6 +25,7 @@ class GoogleSheetsReminder:
                     'datetime': row['datetime'],
                     'text': row['text'],
                     'timezone': row.get('timezone', ''),
+                    'comment': row.get('comment', ''),  # комментарий (пересланное сообщение)
                 })
         return reminders
 
@@ -71,14 +72,15 @@ class GoogleSheetsReminder:
                     'text': row_values[1],
                     'timezone': row_values[2],
                     'sent': row_values[3] if len(row_values) > 3 else '',
-                    'status': row_values[4] if len(row_values) > 4 else ''
+                    'status': row_values[4] if len(row_values) > 4 else '',
+                    'comment': row_values[5] if len(row_values) > 5 else ''
                 }
             return None
         except Exception as e:
             print(f"Ошибка при получении напоминания: {e}")
             return None
         
-    def add_reminder(self, datetime_str: str, text: str, timezone: str = 'Europe/Moscow'):
+    def add_reminder(self, datetime_str: str, text: str, timezone: str = 'Europe/Moscow', comment: str = ''):
         """
         Добавляет новое напоминание в таблицу
         
@@ -86,13 +88,15 @@ class GoogleSheetsReminder:
             datetime_str: Дата и время в формате YYYY-MM-DD HH:MM:SS
             text: Текст напоминания
             timezone: Часовой пояс (по умолчанию Europe/Moscow)
+            comment: Комментарий (пересланное сообщение)
             
         Returns:
             int: Номер строки если успешно добавлено, None в случае ошибки
         """
         try:
             # Добавляем новую строку в конец таблицы
-            new_row = [datetime_str, text, timezone, 'FALSE']  # FALSE означает "не отправлено"
+            # Структура: datetime, text, timezone, sent, status, comment
+            new_row = [datetime_str, text, timezone, 'FALSE', '', comment]
             self.ws.append_row(new_row)
             
             # Получаем номер последней добавленной строки

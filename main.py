@@ -37,7 +37,7 @@ gs = GoogleSheetsReminder(GS_CREDS, GS_SPREADSHEET, GS_WORKSHEET)
 # Глобальная переменная для хранения объекта бота
 bot_instance = None
 
-async def send_reminder(reminder_id: str, text: str, reminder_row: int = None) -> bool:
+async def send_reminder(reminder_id: str, text: str, reminder_row: int = None, comment: str = '') -> bool:
     """Отправка напоминания в Telegram"""
     try:
         if bot_instance:
@@ -51,9 +51,16 @@ async def send_reminder(reminder_id: str, text: str, reminder_row: int = None) -
             # Создаем сообщение с кнопками
             keyboard = inline_manager.create_reminder_buttons()
             
+            # Формируем текст напоминания
+            reminder_text = f"🔔 <b>Напоминание:</b>\n\n{text}"
+            
+            # Если есть комментарий (пересланное сообщение), добавляем его
+            if comment:
+                reminder_text += f"\n\n📎 <b>Пересланное сообщение:</b>\n{comment}"
+            
             message = await bot.send_message(
                 chat_id=TELEGRAM_CHAT_ID,
-                text=f"🔔 <b>Напоминание:</b>\n\n{text}",
+                text=reminder_text,
                 parse_mode='HTML',
                 reply_markup=keyboard
             )
@@ -76,11 +83,16 @@ async def send_reminder(reminder_id: str, text: str, reminder_row: int = None) -
             clean_token = TELEGRAM_TOKEN.strip()
             url = f"https://api.telegram.org/bot{clean_token}/sendMessage"
             async with httpx.AsyncClient() as client:
+                # Формируем текст напоминания
+                reminder_text = f"🔔 Напоминание:\n\n{text}"
+                if comment:
+                    reminder_text += f"\n\n📎 Пересланное сообщение:\n{comment}"
+                
                 response = await client.post(
                     url,
                     json={
                         "chat_id": TELEGRAM_CHAT_ID,
-                        "text": f"🔔 Напоминание:\n\n{text}"
+                        "text": reminder_text
                     }
                 )
                 if response.status_code == 200:
@@ -120,7 +132,7 @@ async def check_reminders() -> None:
             
             # Проверка времени и отправка
             if current_time >= reminder_time_utc:
-                success = await send_reminder(reminder_id, reminder['text'], reminder['row'])
+                success = await send_reminder(reminder_id, reminder['text'], reminder['row'], reminder.get('comment', ''))
                 if success:
                     gs.mark_as_sent(reminder['row'])
                     
