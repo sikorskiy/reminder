@@ -4,6 +4,8 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from message_processor import MessageProcessor
 from google_sheets import GoogleSheetsReminder
 from voice_processor import VoiceProcessor
+from reaction_handler import ReactionHandler
+from reaction_manager import ReactionManager
 import os
 import asyncio
 
@@ -23,15 +25,21 @@ class ReminderBot:
         self.google_sheets = google_sheets
         self.message_processor = MessageProcessor(openai_api_key)
         self.voice_processor = VoiceProcessor(openai_api_key)
+        self.reaction_handler = ReactionHandler(google_sheets)
         
         # Создаем приложение
         self.application = Application.builder().token(telegram_token).build()
         
+        # Инициализируем менеджер реакций
+        self.reaction_manager = ReactionManager(self.application.bot)
+        
         # Добавляем обработчики
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("help", self.help_command))
+        self.application.add_handler(CommandHandler("reactions", self.reactions_command))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         self.application.add_handler(MessageHandler(filters.VOICE, self.handle_voice_message))
+        self.application.add_handler(MessageHandler(filters.REACTION, self.handle_reaction))
         
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start"""
@@ -75,8 +83,18 @@ class ReminderBot:
 Команды:
 /start - Начать работу с ботом
 /help - Показать эту справку
+/reactions - Показать доступные реакции
         """
         await update.message.reply_text(help_message)
+        
+    async def reactions_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /reactions"""
+        help_text = self.reaction_manager.format_reactions_help("main_menu")
+        
+        if help_text:
+            await update.message.reply_text(help_text, parse_mode='HTML')
+        else:
+            await update.message.reply_text("❌ Реакции временно недоступны.")
         
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик текстовых сообщений"""
@@ -109,13 +127,22 @@ class ReminderBot:
                 return
                 
             # Добавляем напоминание в Google Sheets
-            success = self.google_sheets.add_reminder(
+            row_number = self.google_sheets.add_reminder(
                 datetime_str=reminder_info['datetime'],
                 text=reminder_info['text'],
                 timezone=reminder_info.get('timezone', 'Europe/Moscow')
             )
             
-            if success:
+            if row_number:
+                # Сохраняем информацию о последнем напоминании для реакций
+                reminder_data = {
+                    'row': row_number,
+                    'datetime': reminder_info['datetime'],
+                    'text': reminder_info['text'],
+                    'timezone': reminder_info.get('timezone', 'Europe/Moscow')
+                }
+                self.reaction_handler.set_last_reminder(user_id, reminder_data)
+                
                 # Форматируем время для отображения
                 from datetime import datetime
                 dt = datetime.strptime(reminder_info['datetime'], '%Y-%m-%d %H:%M:%S')
@@ -133,6 +160,9 @@ class ReminderBot:
                     f"🔔 Вы получите уведомление в указанное время."
                 )
                 await processing_message.edit_text(success_message, parse_mode='HTML')
+                
+                # Добавляем реакции к сообщению
+                await self.reaction_manager.add_reactions_to_message(processing_message, "reminder_confirmation")
             else:
                 await processing_message.edit_text("❌ Ошибка при сохранении напоминания. Попробуйте позже.")
                 
@@ -223,6 +253,23 @@ class ReminderBot:
             await processing_message.edit_text(
                 "❌ Произошла ошибка при обработке голосового сообщения. Попробуйте позже."
             )
+    
+    async def handle_reaction(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик реакций"""
+        user_id = update.effective_user.id
+        
+        logger.info(f"Получена реакция от пользователя {user_id}")
+        
+        try:
+            # Обрабатываем реакцию
+            handled = await self.reaction_handler.handle_reaction(update, context)
+            
+            if not handled:
+                await update.message.reply_text("❌ Неизвестная реакция. Используйте /reactions для просмотра доступных реакций.")
+                
+        except Exception as e:
+            logger.error(f"Ошибка при обработке реакции: {e}")
+            await update.message.reply_text("❌ Произошла ошибка при обработке реакции.")
             
     def run(self):
         """Запуск бота"""
