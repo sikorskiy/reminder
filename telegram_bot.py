@@ -43,10 +43,10 @@ class ReminderBot:
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("help", self.help_command))
         self.application.add_handler(CommandHandler("buttons", self.buttons_command))
-        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
+        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.FORWARDED, self.handle_message))
         self.application.add_handler(MessageHandler(filters.VOICE, self.handle_voice_message))
-        # Обработчик для пересылаемых сообщений
-        # self.application.add_handler(MessageHandler(filters.FORWARDED, self.handle_forwarded_message))  # Убрано - логика в handle_message
+        # Обработчик для пересылаемых сообщений - только для связывания с предыдущими
+        self.application.add_handler(MessageHandler(filters.FORWARDED, self.handle_forwarded_only))
         # Обработчик для inline-кнопок
         self.application.add_handler(CallbackQueryHandler(self.handle_callback_query))
     
@@ -147,20 +147,12 @@ class ReminderBot:
             if user_id in self.last_user_messages:
                 del self.last_user_messages[user_id]
         else:
-            # Пришло новое сообщение - проверяем, пересылаемое ли оно
-            if hasattr(new_message, 'forward_from') and new_message.forward_from:
-                # Пересылаемое сообщение - обрабатываем пару
-                forwarded_text = new_message.text or new_message.caption or "Пересланное сообщение без текста"
-                await self.handle_message_pair(user_message, forwarded_text, update, context)
-                # Удаляем сообщение из хранилища после обработки пары
-                if user_id in self.last_user_messages:
-                    del self.last_user_messages[user_id]
-            else:
-                # Обычное сообщение - обрабатываем текущее как одиночное
-                await self.process_single_message(user_message, update, context)
-                # Удаляем сообщение из хранилища после обработки
-                if user_id in self.last_user_messages:
-                    del self.last_user_messages[user_id]
+            # Пришло новое сообщение - обрабатываем текущее как одиночное
+            # (пересылаемые сообщения обрабатываются отдельным обработчиком)
+            await self.process_single_message(user_message, update, context)
+            # Удаляем сообщение из хранилища после обработки
+            if user_id in self.last_user_messages:
+                del self.last_user_messages[user_id]
     
     async def check_for_new_message(self, user_id, current_message):
         """Проверяет, пришло ли новое сообщение от пользователя после текущего"""
@@ -179,6 +171,40 @@ class ReminderBot:
         except Exception as e:
             logger.error(f"Ошибка при проверке нового сообщения: {e}")
             return None
+    
+    async def handle_forwarded_only(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик пересылаемых сообщений - только для связывания с предыдущими"""
+        user_id = update.effective_user.id
+        forwarded_message = update.message
+        
+        logger.info(f"Получено пересылаемое сообщение от пользователя {user_id}")
+        
+        # Получаем текст пересылаемого сообщения
+        forwarded_text = forwarded_message.text or forwarded_message.caption or "Пересланное сообщение без текста"
+        
+        # Проверяем, есть ли недавнее сообщение от этого пользователя
+        if user_id in self.last_user_messages:
+            import time
+            last_msg_data = self.last_user_messages[user_id]
+            time_diff = time.time() - last_msg_data['timestamp']
+            
+            # Если прошло меньше таймаута - связываем сообщения
+            if time_diff < self.MESSAGE_LINK_TIMEOUT:
+                # Обрабатываем пару сообщений
+                await self.handle_message_pair(
+                    last_msg_data['message'], 
+                    forwarded_text, 
+                    last_msg_data['update'], 
+                    last_msg_data['context']
+                )
+                # Удаляем сообщение из хранилища после обработки пары
+                if user_id in self.last_user_messages:
+                    del self.last_user_messages[user_id]
+                return
+        
+        # Нет недавнего сообщения - НЕ обрабатываем пересылаемое как напоминание
+        # Просто игнорируем его
+        logger.info(f"Пересылаемое сообщение от пользователя {user_id} проигнорировано - нет связанного сообщения")
     
     async def handle_message_pair(self, first_message, second_message, update, context):
         """Обрабатывает пару сообщений: поясняющее + пересылаемое"""
