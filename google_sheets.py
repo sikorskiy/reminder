@@ -80,12 +80,12 @@ class GoogleSheetsReminder:
             print(f"Ошибка при получении напоминания: {e}")
             return None
         
-    def add_reminder(self, datetime_str: str, text: str, timezone: str = 'Europe/Moscow', comment: str = ''):
+    def add_reminder(self, datetime_str: str = None, text: str = None, timezone: str = 'Europe/Moscow', comment: str = ''):
         """
         Добавляет новое напоминание в таблицу
         
         Args:
-            datetime_str: Дата и время в формате YYYY-MM-DD HH:MM:SS
+            datetime_str: Дата и время в формате YYYY-MM-DD HH:MM:SS (может быть None для напоминаний без времени)
             text: Текст напоминания
             timezone: Часовой пояс (по умолчанию Europe/Moscow)
             comment: Комментарий (пересланное сообщение)
@@ -96,7 +96,9 @@ class GoogleSheetsReminder:
         try:
             # Добавляем новую строку в конец таблицы
             # Структура: datetime, text, timezone, sent, status, comment
-            new_row = [datetime_str, text, timezone, 'FALSE', '', comment]
+            # Если datetime_str None, сохраняем пустую строку
+            datetime_value = datetime_str if datetime_str is not None else ''
+            new_row = [datetime_value, text, timezone, 'FALSE', '', comment]
             self.ws.append_row(new_row)
             
             # Получаем номер последней добавленной строки

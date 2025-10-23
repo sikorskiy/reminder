@@ -72,6 +72,8 @@ class MessageProcessor:
             ВОЗВРАЩАЙ JSON С КЛЮЧАМИ НА АНГЛИЙСКОМ:
             {{"text": "текст напоминания", "datetime": "YYYY-MM-DD HH:MM:SS", "timezone": "Europe/Moscow"}}
             
+            ВАЖНО: Если в сообщении НЕТ информации о времени, установи datetime: null
+            
             Возвращай только JSON объект или null, если не удалось распознать напоминание.
             """
             
@@ -128,10 +130,13 @@ class MessageProcessor:
             # Проверяем наличие обязательных полей
             if 'text' not in reminder_info:
                 return False, "Отсутствует текст напоминания"
-            if 'datetime' not in reminder_info or reminder_info['datetime'] is None:
-                return False, "Отсутствует дата и время"
                 
-            # Проверяем формат даты
+            # Если datetime отсутствует или None, это допустимо (напоминание без времени)
+            if 'datetime' not in reminder_info or reminder_info['datetime'] is None:
+                # Разрешаем напоминания без времени
+                return True, ""
+                
+            # Проверяем формат даты, если она указана
             datetime_str = reminder_info['datetime']
             if not isinstance(datetime_str, str):
                 return False, "Неверный формат даты и времени"

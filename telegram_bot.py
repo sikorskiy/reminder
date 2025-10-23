@@ -141,7 +141,7 @@ class ReminderBot:
                 
             # Добавляем напоминание в Google Sheets
             row_number = self.google_sheets.add_reminder(
-                datetime_str=reminder_info['datetime'],
+                datetime_str=reminder_info.get('datetime'),  # Может быть None
                 text=reminder_info['text'],
                 timezone=reminder_info.get('timezone', 'Europe/Moscow'),
                 comment=''  # Пустой комментарий для обычных сообщений
@@ -159,19 +159,25 @@ class ReminderBot:
                 
                 # Форматируем время для отображения
                 from datetime import datetime
-                dt = datetime.strptime(reminder_info['datetime'], '%Y-%m-%d %H:%M:%S')
-                formatted_time = dt.strftime('%d.%m.%Y в %H:%M')
                 timezone = reminder_info.get('timezone', 'Europe/Moscow')
                 text = reminder_info['text']
+                
+                # Проверяем, есть ли время
+                if reminder_info.get('datetime'):
+                    dt = datetime.strptime(reminder_info['datetime'], '%Y-%m-%d %H:%M:%S')
+                    formatted_time = dt.strftime('%d.%m.%Y в %H:%M')
+                    time_info = f"⏰ <b>Время:</b> {formatted_time}\n🌍 <b>Часовой пояс:</b> {timezone}\n\n🔔 Вы получите уведомление в указанное время."
+                    table_info = f"<code>{reminder_info['datetime']} | {text} | {timezone} | FALSE</code>"
+                else:
+                    time_info = "⚠️ <b>Время не указано</b> - напоминание создано без даты и времени"
+                    table_info = f"<code> | {text} | {timezone} | FALSE</code>"
                 
                 success_message = (
                     f"✅ <b>Напоминание добавлено!</b>\n\n"
                     f"📝 <b>Текст:</b> {text}\n"
-                    f"⏰ <b>Время:</b> {formatted_time}\n"
-                    f"🌍 <b>Часовой пояс:</b> {timezone}\n\n"
+                    f"{time_info}\n\n"
                     f"📊 <i>Строка в таблице:</i>\n"
-                    f"<code>{reminder_info['datetime']} | {text} | {timezone} | FALSE</code>\n\n"
-                    f"🔔 Вы получите уведомление в указанное время."
+                    f"{table_info}"
                 )
                 
                 await processing_message.edit_text(success_message, parse_mode='HTML')
@@ -246,7 +252,7 @@ class ReminderBot:
                 
             # Добавляем напоминание в Google Sheets
             success = self.google_sheets.add_reminder(
-                datetime_str=reminder_info['datetime'],
+                datetime_str=reminder_info.get('datetime'),  # Может быть None
                 text=reminder_info['text'],
                 timezone=reminder_info.get('timezone', 'Europe/Moscow')
             )
@@ -254,20 +260,26 @@ class ReminderBot:
             if success:
                 # Форматируем время для отображения
                 from datetime import datetime
-                dt = datetime.strptime(reminder_info['datetime'], '%Y-%m-%d %H:%M:%S')
-                formatted_time = dt.strftime('%d.%m.%Y в %H:%M')
                 timezone = reminder_info.get('timezone', 'Europe/Moscow')
                 text = reminder_info['text']
+                
+                # Проверяем, есть ли время
+                if reminder_info.get('datetime'):
+                    dt = datetime.strptime(reminder_info['datetime'], '%Y-%m-%d %H:%M:%S')
+                    formatted_time = dt.strftime('%d.%m.%Y в %H:%M')
+                    time_info = f"⏰ <b>Время:</b> {formatted_time}\n🌍 <b>Часовой пояс:</b> {timezone}\n\n🔔 Вы получите уведомление в указанное время."
+                    table_info = f"<code>{reminder_info['datetime']} | {text} | {timezone} | FALSE</code>"
+                else:
+                    time_info = "⚠️ <b>Время не указано</b> - напоминание создано без даты и времени"
+                    table_info = f"<code> | {text} | {timezone} | FALSE</code>"
                 
                 success_message = (
                     f"✅ <b>Напоминание добавлено из голосового сообщения!</b>\n\n"
                     f"🎤 <b>Распознанный текст:</b> {recognized_text}\n\n"
                     f"📝 <b>Текст напоминания:</b> {text}\n"
-                    f"⏰ <b>Время:</b> {formatted_time}\n"
-                    f"🌍 <b>Часовой пояс:</b> {timezone}\n\n"
+                    f"{time_info}\n\n"
                     f"📊 <i>Строка в таблице:</i>\n"
-                    f"<code>{reminder_info['datetime']} | {text} | {timezone} | FALSE</code>\n\n"
-                    f"🔔 Вы получите уведомление в указанное время."
+                    f"{table_info}"
                 )
                 
                 await processing_message.edit_text(success_message, parse_mode='HTML')
@@ -353,7 +365,7 @@ class ReminderBot:
                 # Сохраняем информацию о последнем напоминании для кнопок
                 reminder_data = {
                     'row': row_number,
-                    'datetime': reminder_info['datetime'],
+                    'datetime': reminder_info.get('datetime'),  # Может быть None
                     'text': reminder_info['text'],
                     'timezone': reminder_info.get('timezone', 'Europe/Moscow')
                 }
@@ -361,20 +373,26 @@ class ReminderBot:
                 
                 # Форматируем время для отображения
                 from datetime import datetime
-                dt = datetime.strptime(reminder_info['datetime'], '%Y-%m-%d %H:%M:%S')
-                formatted_time = dt.strftime('%d.%m.%Y в %H:%M')
                 timezone = reminder_info.get('timezone', 'Europe/Moscow')
                 text = reminder_info['text']
+                
+                # Проверяем, есть ли время
+                if reminder_info.get('datetime'):
+                    dt = datetime.strptime(reminder_info['datetime'], '%Y-%m-%d %H:%M:%S')
+                    formatted_time = dt.strftime('%d.%m.%Y в %H:%M')
+                    time_info = f"⏰ <b>Время:</b> {formatted_time}\n🌍 <b>Часовой пояс:</b> {timezone}\n\n🔔 Вы получите уведомление в указанное время."
+                    table_info = f"<code>{reminder_info['datetime']} | {text} | {timezone} | FALSE | | {forwarded_text[:50]}...</code>"
+                else:
+                    time_info = "⚠️ <b>Время не указано</b> - напоминание создано без даты и времени"
+                    table_info = f"<code> | {text} | {timezone} | FALSE | | {forwarded_text[:50]}...</code>"
                 
                 success_message = (
                     f"✅ <b>Напоминание добавлено из пересылаемого сообщения!</b>\n\n"
                     f"📎 <b>Пересланное сообщение:</b> {forwarded_text[:100]}{'...' if len(forwarded_text) > 100 else ''}\n\n"
                     f"📝 <b>Текст напоминания:</b> {text}\n"
-                    f"⏰ <b>Время:</b> {formatted_time}\n"
-                    f"🌍 <b>Часовой пояс:</b> {timezone}\n\n"
+                    f"{time_info}\n\n"
                     f"📊 <i>Строка в таблице:</i>\n"
-                    f"<code>{reminder_info['datetime']} | {text} | {timezone} | FALSE | | {forwarded_text[:50]}...</code>\n\n"
-                    f"🔔 Вы получите уведомление в указанное время."
+                    f"{table_info}"
                 )
                 
                 await processing_message.edit_text(success_message, parse_mode='HTML')

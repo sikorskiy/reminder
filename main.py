@@ -111,8 +111,13 @@ async def check_reminders() -> None:
     current_time = datetime.now(pytz.UTC)
     
     for reminder in reminders:
-        reminder_id = f"{reminder['datetime']}_{reminder['text']}"
+        reminder_id = f"{reminder.get('datetime', 'no_time')}_{reminder['text']}"
         try:
+            # Проверяем, есть ли время у напоминания
+            if not reminder.get('datetime'):
+                logger.info(f"Напоминание {reminder_id} без времени, пропускаем")
+                continue
+                
             # Обработка часового пояса
             timezone_str = reminder.get('timezone') or DEFAULT_TIMEZONE
             try:
