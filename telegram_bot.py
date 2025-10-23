@@ -37,7 +37,7 @@ class ReminderBot:
         self.last_user_messages = {}  # {user_id: {'message': text, 'timestamp': time, 'update': update_obj}}
         
         # Таймаут для связывания сообщений (в секундах)
-        self.MESSAGE_LINK_TIMEOUT = 2  # 2 секунды
+        self.MESSAGE_LINK_TIMEOUT = 5  # 5 секунд
         
         # Добавляем обработчики
         self.application.add_handler(CommandHandler("start", self.start_command))
@@ -140,7 +140,7 @@ class ReminderBot:
         # Проверяем, пришло ли новое сообщение за это время
         if user_id in self.last_user_messages and self.last_user_messages[user_id]['message'] == user_message:
             # Нет нового сообщения - обрабатываем текущее
-            del self.last_user_messages[user_id]
+            # НЕ удаляем из last_user_messages - оставляем для возможного пересылаемого сообщения
             await self.process_single_message(user_message, update, context)
     
     async def check_for_next_message(self, user_id):
@@ -166,6 +166,10 @@ class ReminderBot:
     async def handle_message_pair(self, first_message, second_message, update, context):
         """Обрабатывает пару сообщений: поясняющее + пересылаемое"""
         user_id = update.effective_user.id
+        
+        # Удаляем сообщение из last_user_messages, так как мы его обрабатываем
+        if user_id in self.last_user_messages:
+            del self.last_user_messages[user_id]
         
         # Отправляем сообщение о том, что обрабатываем
         processing_message = await update.message.reply_text("🤔 Обрабатываю пару сообщений...")
@@ -246,6 +250,10 @@ class ReminderBot:
     async def process_single_message(self, user_message, update, context):
         """Обрабатывает одиночное сообщение"""
         user_id = update.effective_user.id
+        
+        # Если это сообщение есть в last_user_messages, удаляем его
+        if user_id in self.last_user_messages and self.last_user_messages[user_id]['message'] == user_message:
+            del self.last_user_messages[user_id]
         
         # Отправляем сообщение о том, что обрабатываем
         processing_message = await update.message.reply_text("🤔 Обрабатываю ваше сообщение...")
@@ -471,8 +479,7 @@ class ReminderBot:
             
             # Если прошло меньше таймаута - связываем сообщения
             if time_diff < self.MESSAGE_LINK_TIMEOUT:
-                # Удаляем из очереди
-                del self.last_user_messages[user_id]
+                # НЕ удаляем здесь - это сделает handle_message_pair
                 
                 # Обрабатываем пару сообщений
                 await self.handle_message_pair(
