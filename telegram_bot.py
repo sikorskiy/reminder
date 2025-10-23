@@ -33,11 +33,11 @@ class ReminderBot:
         # Инициализируем менеджер inline-кнопок
         self.inline_button_manager = InlineButtonManager(self.application.bot)
         
-        # Временное хранение поясняющих сообщений для ожидания пересылаемых
-        self.pending_explanatory_messages = {}  # {user_id: {'message': explanatory_message, 'timestamp': time}}
+        # Временное хранение последнего сообщения от каждого пользователя
+        self.last_user_messages = {}  # {user_id: {'message': text, 'timestamp': time, 'update': update_obj}}
         
-        # Таймаут для ожидания пересылаемых сообщений (в секундах)
-        self.FORWARDED_MESSAGE_TIMEOUT = 300  # 5 минут
+        # Таймаут для связывания сообщений (в секундах)
+        self.MESSAGE_LINK_TIMEOUT = 2  # 2 секунды
         
         # Добавляем обработчики
         self.application.add_handler(CommandHandler("start", self.start_command))
@@ -50,19 +50,18 @@ class ReminderBot:
         # Обработчик для inline-кнопок
         self.application.add_handler(CallbackQueryHandler(self.handle_callback_query))
     
-    def cleanup_expired_pending_messages(self):
-        """Очищает устаревшие ожидающие поясняющие сообщения"""
+    def cleanup_expired_messages(self):
+        """Очищает устаревшие последние сообщения"""
         import time
         current_time = time.time()
         expired_users = []
         
-        for user_id, data in self.pending_explanatory_messages.items():
-            if current_time - data['timestamp'] > self.FORWARDED_MESSAGE_TIMEOUT:
+        for user_id, data in self.last_user_messages.items():
+            if current_time - data['timestamp'] > self.MESSAGE_LINK_TIMEOUT:
                 expired_users.append(user_id)
         
         for user_id in expired_users:
-            del self.pending_explanatory_messages[user_id]
-            logger.info(f"Очищено устаревшее ожидающее сообщение для пользователя {user_id}")
+            del self.last_user_messages[user_id]
         
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start"""
@@ -123,13 +122,130 @@ class ReminderBot:
         
         logger.info(f"Получено сообщение от пользователя {user_id}: {user_message}")
         
-        # Очищаем устаревшие ожидающие сообщения
-        self.cleanup_expired_pending_messages()
+        # Очищаем устаревшие сообщения
+        self.cleanup_expired_messages()
         
-        # Проверяем, есть ли ожидающее поясняющее сообщение для этого пользователя
-        if user_id in self.pending_explanatory_messages:
-            # Очищаем ожидающее сообщение (возможно, пользователь передумал)
-            del self.pending_explanatory_messages[user_id]
+        # Сохраняем текущее сообщение для возможного связывания со следующим
+        import time
+        self.last_user_messages[user_id] = {
+            'message': user_message,
+            'timestamp': time.time(),
+            'update': update,
+            'context': context
+        }
+        
+        # Делаем паузу, чтобы проверить, придет ли еще сообщение
+        await asyncio.sleep(1)
+        
+        # Проверяем, пришло ли новое сообщение за это время
+        if user_id in self.last_user_messages and self.last_user_messages[user_id]['message'] == user_message:
+            # Нет нового сообщения - обрабатываем текущее
+            del self.last_user_messages[user_id]
+            await self.process_single_message(user_message, update, context)
+    
+    async def check_for_next_message(self, user_id):
+        """Проверяет, есть ли следующее сообщение от пользователя"""
+        try:
+            # Получаем последние обновления
+            updates = await self.application.bot.get_updates(limit=10)
+            
+            # Ищем сообщения от того же пользователя, которые пришли после текущего
+            for update in updates:
+                if (update.message and 
+                    update.message.from_user and 
+                    update.message.from_user.id == user_id and
+                    update.message.text and
+                    not update.message.forward_from):  # Не пересылаемое сообщение
+                    return update.message.text
+            
+            return None
+        except Exception as e:
+            logger.error(f"Ошибка при проверке следующего сообщения: {e}")
+            return None
+    
+    async def handle_message_pair(self, first_message, second_message, update, context):
+        """Обрабатывает пару сообщений: поясняющее + пересылаемое"""
+        user_id = update.effective_user.id
+        
+        # Отправляем сообщение о том, что обрабатываем
+        processing_message = await update.message.reply_text("🤔 Обрабатываю пару сообщений...")
+        
+        try:
+            # Извлекаем информацию о напоминании из первого сообщения
+            reminder_info = self.message_processor.extract_reminder_info(first_message)
+            
+            if reminder_info is None:
+                await processing_message.edit_text(
+                    "❌ Не удалось распознать напоминание в первом сообщении.\n\n"
+                    "Попробуйте указать время более четко."
+                )
+                return
+                
+            # Валидируем информацию
+            is_valid, error_message = self.message_processor.validate_reminder_info(reminder_info)
+            
+            if not is_valid:
+                await processing_message.edit_text(
+                    f"🤔 <b>Не удалось создать напоминание</b>\n\n"
+                    f"<i>Причина:</i> {error_message}"
+                )
+                return
+                
+            # Добавляем напоминание в Google Sheets с комментарием
+            row_number = self.google_sheets.add_reminder(
+                datetime_str=reminder_info.get('datetime'),  # Может быть None
+                text=reminder_info['text'],
+                timezone=reminder_info.get('timezone', 'Europe/Moscow'),
+                comment=second_message  # Второе сообщение как комментарий
+            )
+            
+            if row_number:
+                # Сохраняем информацию о последнем напоминании для кнопок
+                reminder_data = {
+                    'row': row_number,
+                    'datetime': reminder_info.get('datetime'),  # Может быть None
+                    'text': reminder_info['text'],
+                    'timezone': reminder_info.get('timezone', 'Europe/Moscow')
+                }
+                self.inline_button_handler.set_last_reminder(user_id, reminder_data)
+                
+                # Формируем сообщение об успехе
+                from datetime import datetime
+                timezone = reminder_info.get('timezone', 'Europe/Moscow')
+                text = reminder_info['text']
+                
+                # Проверяем, есть ли время
+                if reminder_info.get('datetime'):
+                    dt = datetime.strptime(reminder_info['datetime'], '%Y-%m-%d %H:%M:%S')
+                    formatted_time = dt.strftime('%d.%m.%Y в %H:%M')
+                    time_info = f"⏰ <b>Время:</b> {formatted_time}\n🌍 <b>Часовой пояс:</b> {timezone}\n\n🔔 Вы получите уведомление в указанное время."
+                    table_info = f"<code>{reminder_info['datetime']} | {text} | {timezone} | FALSE | | {second_message[:50]}...</code>"
+                else:
+                    time_info = "⚠️ <b>Время не указано</b> - напоминание создано без даты и времени"
+                    table_info = f"<code> | {text} | {timezone} | FALSE | | {second_message[:50]}...</code>"
+                
+                success_message = (
+                    f"✅ <b>Напоминание добавлено из пары сообщений!</b>\n\n"
+                    f"📝 <b>Текст напоминания:</b> {text}\n"
+                    f"📎 <b>Комментарий:</b> {second_message[:100]}{'...' if len(second_message) > 100 else ''}\n"
+                    f"{time_info}\n\n"
+                    f"📊 <i>Строка в таблице:</i>\n"
+                    f"{table_info}"
+                )
+                
+                await processing_message.edit_text(success_message, parse_mode='HTML')
+            else:
+                await processing_message.edit_text("❌ Ошибка при сохранении напоминания. Попробуйте позже.")
+                
+        except Exception as e:
+            logger.error(f"Ошибка при обработке пары сообщений: {e}")
+            await processing_message.edit_text(
+                "❌ Произошла ошибка при обработке пары сообщений. Попробуйте позже."
+            )
+    
+    async def process_single_message(self, user_message, update, context):
+        """Обрабатывает одиночное сообщение"""
+        user_id = update.effective_user.id
         
         # Отправляем сообщение о том, что обрабатываем
         processing_message = await update.message.reply_text("🤔 Обрабатываю ваше сообщение...")
@@ -184,14 +300,6 @@ class ReminderBot:
                     'timezone': reminder_info.get('timezone', 'Europe/Moscow')
                 }
                 self.inline_button_handler.set_last_reminder(user_id, reminder_data)
-                
-                # Сохраняем поясняющее сообщение для возможного пересылаемого сообщения
-                import time
-                self.pending_explanatory_messages[user_id] = {
-                    'message': user_message,
-                    'reminder_data': reminder_data,
-                    'timestamp': time.time()
-                }
                 
                 # Форматируем время для отображения
                 from datetime import datetime
@@ -352,18 +460,35 @@ class ReminderBot:
         
         logger.info(f"Получено пересылаемое сообщение от пользователя {user_id}")
         
-        # Очищаем устаревшие ожидающие сообщения
-        self.cleanup_expired_pending_messages()
+        # Получаем текст пересылаемого сообщения
+        forwarded_text = forwarded_message.text or forwarded_message.caption or "Пересланное сообщение без текста"
         
-        # Отправляем сообщение о том, что обрабатываем
+        # Проверяем, было ли недавно обычное сообщение от этого пользователя
+        if user_id in self.last_user_messages:
+            import time
+            last_msg_data = self.last_user_messages[user_id]
+            time_diff = time.time() - last_msg_data['timestamp']
+            
+            # Если прошло меньше таймаута - связываем сообщения
+            if time_diff < self.MESSAGE_LINK_TIMEOUT:
+                # Удаляем из очереди
+                del self.last_user_messages[user_id]
+                
+                # Обрабатываем пару сообщений
+                await self.handle_message_pair(
+                    last_msg_data['message'], 
+                    forwarded_text, 
+                    last_msg_data['update'], 
+                    last_msg_data['context']
+                )
+                return
+        
+        # Нет недавнего сообщения - обрабатываем пересылаемое как обычное напоминание
         processing_message = await update.message.reply_text("📎 Обрабатываю пересылаемое сообщение...")
         
         try:
-            # Получаем текст пересылаемого сообщения
-            forwarded_text = forwarded_message.text or forwarded_message.caption or "Пересланное сообщение без текста"
-            
-            # Проверяем, есть ли ожидающее поясняющее сообщение для этого пользователя
-            if user_id in self.pending_explanatory_messages:
+            # Проверяем, есть ли ожидающее поясняющее сообщение для этого пользователя (старая логика)
+            if False:  # Отключаем старую логику
                 # Есть ожидающее поясняющее сообщение - объединяем их
                 explanatory_data = self.pending_explanatory_messages[user_id]
                 explanatory_message = explanatory_data['message']
