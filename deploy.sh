@@ -31,7 +31,7 @@ info() {
 
 # Конфигурация (измените под ваш сервер)
 SERVER_USER="root"
-SERVER_HOST="your-server-ip"  # Замените на IP вашего сервера
+SERVER_HOST="80.90.183.91"  # Замените на IP вашего сервера
 SERVER_PROJECT_DIR="/opt/telegram_bots/reminder_bot"
 SERVICE_NAME="reminder-bot.service"
 
@@ -67,11 +67,24 @@ copy_to_server() {
 init_server() {
     log "Инициализация Git на сервере..."
     
-    # Копируем скрипт инициализации
-    copy_to_server "init_server_git.sh" "/tmp/"
-    
-    # Запускаем инициализацию
-    run_on_server "chmod +x /tmp/init_server_git.sh && /tmp/init_server_git.sh"
+    # Проверяем, существует ли уже Git репозиторий
+    if run_on_server "[ -d '$SERVER_PROJECT_DIR/.git' ]"; then
+        log "Git репозиторий уже существует, используем простое обновление..."
+        
+        # Копируем простой скрипт обновления
+        copy_to_server "simple_update.sh" "/tmp/"
+        
+        # Запускаем простое обновление
+        run_on_server "chmod +x /tmp/simple_update.sh && /tmp/simple_update.sh"
+    else
+        log "Создаем новый Git репозиторий..."
+        
+        # Копируем скрипт инициализации
+        copy_to_server "init_server_git.sh" "/tmp/"
+        
+        # Запускаем инициализацию
+        run_on_server "chmod +x /tmp/init_server_git.sh && /tmp/init_server_git.sh"
+    fi
     
     if [ $? -eq 0 ]; then
         log "✅ Инициализация завершена"

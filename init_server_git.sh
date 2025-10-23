@@ -58,11 +58,14 @@ if [ -d ".git" ]; then
     info "Текущий remote:"
     git remote -v
     
-    read -p "Хотите обновить remote URL? (y/n): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
+    # Автоматически обновляем remote URL если он отличается
+    CURRENT_URL=$(git remote get-url origin)
+    if [ "$CURRENT_URL" != "$REPO_URL" ]; then
+        log "Обновляем remote URL с $CURRENT_URL на $REPO_URL"
         git remote set-url origin "$REPO_URL"
         log "Remote URL обновлен"
+    else
+        log "Remote URL уже корректный"
     fi
 else
     log "Инициализация Git репозитория..."
@@ -93,7 +96,14 @@ fi
 # Проверка ветки main
 if git show-ref --verify --quiet refs/remotes/origin/main; then
     log "Переключение на ветку main..."
-    git checkout -b main origin/main
+    # Проверяем, существует ли уже локальная ветка main
+    if git show-ref --verify --quiet refs/heads/main; then
+        log "Локальная ветка main уже существует, переключаемся на неё"
+        git checkout main
+        git pull origin main
+    else
+        git checkout -b main origin/main
+    fi
 else
     error "Ветка main не найдена в удаленном репозитории"
     exit 1
