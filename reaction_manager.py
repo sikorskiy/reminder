@@ -36,11 +36,13 @@ class ReactionManager:
                 logger.warning(f"Нет реакций для состояния: {state}")
                 return False
             
-            # Добавляем реакции к сообщению
+            # Добавляем реакции к сообщению с ограничениями
             await self.bot.set_message_reaction(
                 chat_id=message.chat_id,
                 message_id=message.message_id,
-                reaction=[{"type": "emoji", "emoji": emoji} for emoji in reactions]
+                reaction=[{"type": "emoji", "emoji": emoji} for emoji in reactions],
+                is_big=False,  # Обычный размер реакций
+                allow_multiple_reactions=False  # Запретить множественные реакции
             )
             
             logger.info(f"Добавлены реакции {reactions} к сообщению {message.message_id}")
@@ -69,11 +71,13 @@ class ReactionManager:
                 logger.warning(f"Нет валидных реакций в списке: {reactions}")
                 return False
             
-            # Добавляем реакции к сообщению
+            # Добавляем реакции к сообщению с ограничениями
             await self.bot.set_message_reaction(
                 chat_id=message.chat_id,
                 message_id=message.message_id,
-                reaction=[{"type": "emoji", "emoji": emoji} for emoji in valid_reactions]
+                reaction=[{"type": "emoji", "emoji": emoji} for emoji in valid_reactions],
+                is_big=False,  # Обычный размер реакций
+                allow_multiple_reactions=False  # Запретить множественные реакции
             )
             
             logger.info(f"Добавлены пользовательские реакции {valid_reactions} к сообщению {message.message_id}")
@@ -105,6 +109,39 @@ class ReactionManager:
             
         except Exception as e:
             logger.error(f"Ошибка при удалении реакций: {e}")
+            return False
+    
+    async def enforce_reactions(self, message: Message, state: str) -> bool:
+        """
+        Принудительно устанавливает только разрешенные реакции на сообщении
+        
+        Args:
+            message: Сообщение для установки реакций
+            state: Состояние для определения набора реакций
+            
+        Returns:
+            True если реакции установлены успешно
+        """
+        try:
+            reactions = get_reactions_for_state(state)
+            if not reactions:
+                logger.warning(f"Нет реакций для состояния: {state}")
+                return False
+            
+            # Принудительно устанавливаем только разрешенные реакции
+            await self.bot.set_message_reaction(
+                chat_id=message.chat_id,
+                message_id=message.message_id,
+                reaction=[{"type": "emoji", "emoji": emoji} for emoji in reactions],
+                is_big=False,
+                allow_multiple_reactions=False
+            )
+            
+            logger.info(f"Принудительно установлены реакции {reactions} на сообщение {message.message_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Ошибка при принудительной установке реакций: {e}")
             return False
     
     def get_reaction_description(self, emoji: str) -> str:

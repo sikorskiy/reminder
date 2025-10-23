@@ -93,7 +93,16 @@ class ReminderBot:
         help_text = self.reaction_manager.format_reactions_help("main_menu")
         
         if help_text:
-            await update.message.reply_text(help_text, parse_mode='HTML')
+            full_message = (
+                f"{help_text}\n"
+                f"🔒 <b>Важно:</b> Поддерживаются только эти две реакции.\n"
+                f"❌ Другие реакции будут автоматически удалены.\n\n"
+                f"💡 <b>Как использовать:</b>\n"
+                f"1. Создайте напоминание\n"
+                f"2. Нажмите на одну из доступных реакций\n"
+                f"3. Бот выполнит соответствующее действие"
+            )
+            await update.message.reply_text(full_message, parse_mode='HTML')
         else:
             await update.message.reply_text("❌ Реакции временно недоступны.")
         

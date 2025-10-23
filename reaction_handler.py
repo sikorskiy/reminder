@@ -56,7 +56,21 @@ class ReactionHandler:
             # Получаем конфигурацию реакции
             reaction_config = get_reaction_config(emoji)
             if not reaction_config:
-                logger.warning(f"Неизвестная реакция: {emoji}")
+                logger.warning(f"Неизвестная реакция: {emoji} - исправляем")
+                
+                # Принудительно устанавливаем только разрешенные реакции
+                from reaction_manager import ReactionManager
+                reaction_manager = ReactionManager(context.bot)
+                await reaction_manager.enforce_reactions(update.message, "reminder_management")
+                
+                # Отправляем сообщение пользователю о том, что реакция не поддерживается
+                await update.message.reply_text(
+                    f"❌ Реакция {emoji} не поддерживается.\n\n"
+                    f"🎯 <b>Доступные реакции:</b>\n"
+                    f"❌ <b>Отменить</b> - отменить напоминание\n"
+                    f"✅ <b>Выполнено</b> - отметить как выполненное",
+                    parse_mode='HTML'
+                )
                 return False
                 
             # Выполняем действие
