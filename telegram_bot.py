@@ -91,9 +91,8 @@ class ReminderBot:
     async def buttons_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /buttons"""
         help_text = self.inline_button_manager.format_buttons_help()
-        keyboard = self.inline_button_manager.create_help_buttons()
         
-        await update.message.reply_text(help_text, parse_mode='HTML', reply_markup=keyboard)
+        await update.message.reply_text(help_text, parse_mode='HTML')
         
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик текстовых сообщений"""
