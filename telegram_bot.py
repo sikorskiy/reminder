@@ -154,7 +154,7 @@ class ReminderBot:
         
         try:
             # Распознаем речь
-            recognized_text = await self.voice_processor.process_voice_message(update)
+            recognized_text = await self.voice_processor.process_voice_message(update, context)
             
             if not recognized_text:
                 await processing_message.edit_text(

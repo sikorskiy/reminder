@@ -26,12 +26,13 @@ class VoiceProcessor:
         self.openai_api_key = openai_api_key
         self.client = openai.OpenAI(api_key=openai_api_key)
         
-    async def process_voice_message(self, update: Update) -> Optional[str]:
+    async def process_voice_message(self, update: Update, context) -> Optional[str]:
         """
         Обрабатывает голосовое сообщение и возвращает распознанный текст
         
         Args:
             update: Объект Update от Telegram
+            context: Контекст бота
             
         Returns:
             Распознанный текст или None в случае ошибки
@@ -40,7 +41,7 @@ class VoiceProcessor:
             voice = update.message.voice
             
             # Получаем информацию о файле
-            file_info = await update.message.bot.get_file(voice.file_id)
+            file_info = await context.bot.get_file(voice.file_id)
             file_url = file_info.file_path
             
             logger.info(f"Обрабатываем голосовое сообщение: {voice.file_id}")
