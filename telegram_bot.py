@@ -251,9 +251,8 @@ class ReminderBot:
         """Обрабатывает одиночное сообщение"""
         user_id = update.effective_user.id
         
-        # Если это сообщение есть в last_user_messages, удаляем его
-        if user_id in self.last_user_messages and self.last_user_messages[user_id]['message'] == user_message:
-            del self.last_user_messages[user_id]
+        # НЕ удаляем сообщение из last_user_messages здесь!
+        # Оно будет удалено либо при связывании, либо по таймауту
         
         # Отправляем сообщение о том, что обрабатываем
         processing_message = await update.message.reply_text("🤔 Обрабатываю ваше сообщение...")
@@ -333,6 +332,10 @@ class ReminderBot:
                 )
                 
                 await processing_message.edit_text(success_message, parse_mode='HTML')
+                
+                # Удаляем сообщение из last_user_messages после успешного создания напоминания
+                if user_id in self.last_user_messages and self.last_user_messages[user_id]['message'] == user_message:
+                    del self.last_user_messages[user_id]
             else:
                 await processing_message.edit_text("❌ Ошибка при сохранении напоминания. Попробуйте позже.")
                 
