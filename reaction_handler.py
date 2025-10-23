@@ -35,6 +35,10 @@ class ReactionHandler:
             True если реакция обработана, False если нет
         """
         try:
+            # Проверяем, есть ли реакция в сообщении
+            if not hasattr(update.message, 'reaction') or not update.message.reaction:
+                return False
+                
             reaction = update.message.reaction
             user_id = update.effective_user.id
             

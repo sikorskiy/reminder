@@ -39,7 +39,8 @@ class ReminderBot:
         self.application.add_handler(CommandHandler("reactions", self.reactions_command))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         self.application.add_handler(MessageHandler(filters.VOICE, self.handle_voice_message))
-        self.application.add_handler(MessageHandler(filters.REACTION, self.handle_reaction))
+        # Обработчик для всех сообщений (включая реакции)
+        self.application.add_handler(MessageHandler(filters.ALL, self.handle_all_messages))
         
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start"""
@@ -253,6 +254,12 @@ class ReminderBot:
             await processing_message.edit_text(
                 "❌ Произошла ошибка при обработке голосового сообщения. Попробуйте позже."
             )
+    
+    async def handle_all_messages(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик всех сообщений (включая реакции)"""
+        # Проверяем, есть ли реакция в сообщении
+        if hasattr(update.message, 'reaction') and update.message.reaction:
+            await self.handle_reaction(update, context)
     
     async def handle_reaction(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик реакций"""
