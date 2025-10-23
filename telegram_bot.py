@@ -1,11 +1,11 @@
 import logging
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from message_processor import MessageProcessor
 from google_sheets import GoogleSheetsReminder
 from voice_processor import VoiceProcessor
-from reaction_handler import ReactionHandler
-from reaction_manager import ReactionManager
+from inline_button_handler import InlineButtonHandler
+from inline_buttons import InlineButtonManager
 import os
 import asyncio
 
@@ -25,22 +25,22 @@ class ReminderBot:
         self.google_sheets = google_sheets
         self.message_processor = MessageProcessor(openai_api_key)
         self.voice_processor = VoiceProcessor(openai_api_key)
-        self.reaction_handler = ReactionHandler(google_sheets)
+        self.inline_button_handler = InlineButtonHandler(google_sheets)
         
         # Создаем приложение
         self.application = Application.builder().token(telegram_token).build()
         
-        # Инициализируем менеджер реакций
-        self.reaction_manager = ReactionManager(self.application.bot)
+        # Инициализируем менеджер inline-кнопок
+        self.inline_button_manager = InlineButtonManager(self.application.bot)
         
         # Добавляем обработчики
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("help", self.help_command))
-        self.application.add_handler(CommandHandler("reactions", self.reactions_command))
+        self.application.add_handler(CommandHandler("buttons", self.buttons_command))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         self.application.add_handler(MessageHandler(filters.VOICE, self.handle_voice_message))
-        # Обработчик для всех сообщений (включая реакции)
-        self.application.add_handler(MessageHandler(filters.ALL, self.handle_all_messages))
+        # Обработчик для inline-кнопок
+        self.application.add_handler(CallbackQueryHandler(self.handle_callback_query))
         
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start"""
@@ -84,27 +84,16 @@ class ReminderBot:
 Команды:
 /start - Начать работу с ботом
 /help - Показать эту справку
-/reactions - Показать доступные реакции
+/buttons - Показать доступные кнопки управления
         """
         await update.message.reply_text(help_message)
         
-    async def reactions_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /reactions"""
-        help_text = self.reaction_manager.format_reactions_help("main_menu")
+    async def buttons_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /buttons"""
+        help_text = self.inline_button_manager.format_buttons_help()
+        keyboard = self.inline_button_manager.create_help_buttons()
         
-        if help_text:
-            full_message = (
-                f"{help_text}\n"
-                f"🔒 <b>Важно:</b> Поддерживаются только эти две реакции.\n"
-                f"❌ Другие реакции будут автоматически удалены.\n\n"
-                f"💡 <b>Как использовать:</b>\n"
-                f"1. Создайте напоминание\n"
-                f"2. Нажмите на одну из доступных реакций\n"
-                f"3. Бот выполнит соответствующее действие"
-            )
-            await update.message.reply_text(full_message, parse_mode='HTML')
-        else:
-            await update.message.reply_text("❌ Реакции временно недоступны.")
+        await update.message.reply_text(help_text, parse_mode='HTML', reply_markup=keyboard)
         
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик текстовых сообщений"""
@@ -157,14 +146,14 @@ class ReminderBot:
             )
             
             if row_number:
-                # Сохраняем информацию о последнем напоминании для реакций
+                # Сохраняем информацию о последнем напоминании для кнопок
                 reminder_data = {
                     'row': row_number,
                     'datetime': reminder_info['datetime'],
                     'text': reminder_info['text'],
                     'timezone': reminder_info.get('timezone', 'Europe/Moscow')
                 }
-                self.reaction_handler.set_last_reminder(user_id, reminder_data)
+                self.inline_button_handler.set_last_reminder(user_id, reminder_data)
                 
                 # Форматируем время для отображения
                 from datetime import datetime
@@ -182,10 +171,10 @@ class ReminderBot:
                     f"<code>{reminder_info['datetime']} | {text} | {timezone} | FALSE</code>\n\n"
                     f"🔔 Вы получите уведомление в указанное время."
                 )
-                await processing_message.edit_text(success_message, parse_mode='HTML')
                 
-                # Добавляем реакции к сообщению
-                await self.reaction_manager.add_reactions_to_message(processing_message, "reminder_confirmation")
+                # Добавляем inline-кнопки к сообщению
+                keyboard = self.inline_button_manager.create_reminder_buttons()
+                await processing_message.edit_text(success_message, parse_mode='HTML', reply_markup=keyboard)
             else:
                 await processing_message.edit_text("❌ Ошибка при сохранении напоминания. Попробуйте позже.")
                 
@@ -280,7 +269,10 @@ class ReminderBot:
                     f"<code>{reminder_info['datetime']} | {text} | {timezone} | FALSE</code>\n\n"
                     f"🔔 Вы получите уведомление в указанное время."
                 )
-                await processing_message.edit_text(success_message, parse_mode='HTML')
+                
+                # Добавляем inline-кнопки к сообщению
+                keyboard = self.inline_button_manager.create_reminder_buttons()
+                await processing_message.edit_text(success_message, parse_mode='HTML', reply_markup=keyboard)
             else:
                 await processing_message.edit_text("❌ Ошибка при сохранении напоминания. Попробуйте позже.")
                 
@@ -290,28 +282,22 @@ class ReminderBot:
                 "❌ Произошла ошибка при обработке голосового сообщения. Попробуйте позже."
             )
     
-    async def handle_all_messages(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик всех сообщений (включая реакции)"""
-        # Проверяем, есть ли реакция в сообщении
-        if hasattr(update.message, 'reaction') and update.message.reaction:
-            await self.handle_reaction(update, context)
-    
-    async def handle_reaction(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик реакций"""
+    async def handle_callback_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик inline-кнопок"""
         user_id = update.effective_user.id
         
-        logger.info(f"Получена реакция от пользователя {user_id}")
+        logger.info(f"Получен callback от пользователя {user_id}")
         
         try:
-            # Обрабатываем реакцию
-            handled = await self.reaction_handler.handle_reaction(update, context)
+            # Обрабатываем callback
+            handled = await self.inline_button_handler.handle_callback_query(update, context)
             
             if not handled:
-                await update.message.reply_text("❌ Неизвестная реакция. Используйте /reactions для просмотра доступных реакций.")
+                await update.callback_query.answer("❌ Неизвестное действие.")
                 
         except Exception as e:
-            logger.error(f"Ошибка при обработке реакции: {e}")
-            await update.message.reply_text("❌ Произошла ошибка при обработке реакции.")
+            logger.error(f"Ошибка при обработке callback: {e}")
+            await update.callback_query.answer("❌ Произошла ошибка при обработке действия.")
             
     def run(self):
         """Запуск бота"""

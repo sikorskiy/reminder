@@ -1,20 +1,19 @@
 """
-Обработчик реакций для Telegram бота
+Обработчик inline-кнопок для Telegram бота
 """
 
 import logging
 from typing import Optional, Dict, Any
-from telegram import Update, Message
+from telegram import Update, CallbackQuery
 from telegram.ext import ContextTypes
-from reactions_config import get_reaction_config, get_action_message, REACTIONS_CONFIG
 from google_sheets import GoogleSheetsReminder
 
 logger = logging.getLogger(__name__)
 
-class ReactionHandler:
+class InlineButtonHandler:
     def __init__(self, google_sheets: GoogleSheetsReminder):
         """
-        Инициализация обработчика реакций
+        Инициализация обработчика inline-кнопок
         
         Args:
             google_sheets: Экземпляр GoogleSheetsReminder для работы с данными
@@ -23,95 +22,58 @@ class ReactionHandler:
         self.user_states = {}  # Состояния пользователей
         self.last_reminders = {}  # Последние напоминания пользователей
         
-    async def handle_reaction(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    async def handle_callback_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         """
-        Обрабатывает реакцию пользователя
+        Обрабатывает нажатие на inline-кнопку
         
         Args:
             update: Объект Update от Telegram
             context: Контекст бота
             
         Returns:
-            True если реакция обработана, False если нет
+            True если callback обработан, False если нет
         """
         try:
-            # Проверяем, есть ли реакция в сообщении
-            if not hasattr(update.message, 'reaction') or not update.message.reaction:
-                return False
-                
-            reaction = update.message.reaction
+            query = update.callback_query
             user_id = update.effective_user.id
+            callback_data = query.data
             
-            if not reaction:
-                return False
-                
-            # Получаем первую реакцию (обычно пользователь ставит одну)
-            emoji = reaction[0].emoji if reaction else None
+            logger.info(f"Получен callback от пользователя {user_id}: {callback_data}")
             
-            if not emoji:
-                return False
-                
-            logger.info(f"Получена реакция {emoji} от пользователя {user_id}")
+            # Подтверждаем получение callback
+            await query.answer()
             
-            # Получаем конфигурацию реакции
-            reaction_config = get_reaction_config(emoji)
-            if not reaction_config:
-                logger.warning(f"Неизвестная реакция: {emoji} - исправляем")
-                
-                # Принудительно устанавливаем только разрешенные реакции
-                from reaction_manager import ReactionManager
-                reaction_manager = ReactionManager(context.bot)
-                await reaction_manager.enforce_reactions(update.message, "reminder_management")
-                
-                # Отправляем сообщение пользователю о том, что реакция не поддерживается
-                await update.message.reply_text(
-                    f"❌ Реакция {emoji} не поддерживается.\n\n"
-                    f"🎯 <b>Доступные реакции:</b>\n"
-                    f"❌ <b>Отменить</b> - отменить напоминание\n"
-                    f"✅ <b>Выполнено</b> - отметить как выполненное",
-                    parse_mode='HTML'
-                )
+            # Выполняем действие в зависимости от callback_data
+            if callback_data == "cancel_reminder":
+                result = await self._cancel_reminder(update, context, user_id)
+            elif callback_data == "mark_done":
+                result = await self._mark_done(update, context, user_id)
+            else:
+                logger.warning(f"Неизвестный callback_data: {callback_data}")
+                await query.edit_message_text("❌ Неизвестное действие.")
                 return False
-                
-            # Выполняем действие
-            action = reaction_config["action"]
-            result = await self._execute_action(action, update, context, user_id)
             
             if result:
-                # Отправляем подтверждение
-                message = get_action_message(action)
-                await update.message.reply_text(message)
+                # Обновляем текст сообщения с результатом
+                if callback_data == "cancel_reminder":
+                    await query.edit_message_text(
+                        query.message.text + "\n\n❌ <b>Напоминание отменено.</b>",
+                        parse_mode='HTML'
+                    )
+                elif callback_data == "mark_done":
+                    await query.edit_message_text(
+                        query.message.text + "\n\n✅ <b>Напоминание отмечено как выполненное.</b>",
+                        parse_mode='HTML'
+                    )
+                
+                # Убираем кнопки после выполнения действия
+                await query.edit_message_reply_markup(reply_markup=None)
                 
             return True
             
         except Exception as e:
-            logger.error(f"Ошибка при обработке реакции: {e}")
-            return False
-    
-    async def _execute_action(self, action: str, update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
-        """
-        Выполняет конкретное действие
-        
-        Args:
-            action: Название действия
-            update: Объект Update от Telegram
-            context: Контекст бота
-            user_id: ID пользователя
-            
-        Returns:
-            True если действие выполнено успешно
-        """
-        try:
-            if action == "cancel_reminder":
-                return await self._cancel_reminder(update, context, user_id)
-            elif action == "mark_done":
-                return await self._mark_done(update, context, user_id)
-            else:
-                logger.warning(f"Неизвестное действие: {action}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Ошибка при выполнении действия {action}: {e}")
+            logger.error(f"Ошибка при обработке callback: {e}")
+            await query.answer("❌ Произошла ошибка при обработке действия.")
             return False
     
     async def _cancel_reminder(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
@@ -120,7 +82,10 @@ class ReactionHandler:
             # Получаем последнее напоминание пользователя
             last_reminder = self.last_reminders.get(user_id)
             if not last_reminder:
-                await update.message.reply_text("❌ Не найдено напоминание для отмены.")
+                await update.callback_query.edit_message_text(
+                    update.callback_query.message.text + "\n\n❌ <b>Не найдено напоминание для отмены.</b>",
+                    parse_mode='HTML'
+                )
                 return False
             
             # Обновляем статус в Google Sheets
@@ -130,7 +95,10 @@ class ReactionHandler:
                 logger.info(f"Пользователь {user_id} отменил напоминание в строке {last_reminder['row']}")
                 return True
             else:
-                await update.message.reply_text("❌ Ошибка при отмене напоминания.")
+                await update.callback_query.edit_message_text(
+                    update.callback_query.message.text + "\n\n❌ <b>Ошибка при отмене напоминания.</b>",
+                    parse_mode='HTML'
+                )
                 return False
                 
         except Exception as e:
@@ -143,7 +111,10 @@ class ReactionHandler:
             # Получаем последнее напоминание пользователя
             last_reminder = self.last_reminders.get(user_id)
             if not last_reminder:
-                await update.message.reply_text("❌ Не найдено напоминание для отметки.")
+                await update.callback_query.edit_message_text(
+                    update.callback_query.message.text + "\n\n❌ <b>Не найдено напоминание для отметки.</b>",
+                    parse_mode='HTML'
+                )
                 return False
             
             # Обновляем статус в Google Sheets
@@ -153,7 +124,10 @@ class ReactionHandler:
                 logger.info(f"Пользователь {user_id} отметил напоминание как выполненное в строке {last_reminder['row']}")
                 return True
             else:
-                await update.message.reply_text("❌ Ошибка при отметке напоминания.")
+                await update.callback_query.edit_message_text(
+                    update.callback_query.message.text + "\n\n❌ <b>Ошибка при отметке напоминания.</b>",
+                    parse_mode='HTML'
+                )
                 return False
                 
         except Exception as e:
