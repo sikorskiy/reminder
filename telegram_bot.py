@@ -46,7 +46,7 @@ class ReminderBot:
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         self.application.add_handler(MessageHandler(filters.VOICE, self.handle_voice_message))
         # Обработчик для пересылаемых сообщений
-        self.application.add_handler(MessageHandler(filters.FORWARDED, self.handle_forwarded_message))
+        # self.application.add_handler(MessageHandler(filters.FORWARDED, self.handle_forwarded_message))  # Убрано - логика в handle_message
         # Обработчик для inline-кнопок
         self.application.add_handler(CallbackQueryHandler(self.handle_callback_query))
     
@@ -137,14 +137,33 @@ class ReminderBot:
         # Делаем паузу, чтобы проверить, придет ли еще сообщение
         await asyncio.sleep(1)
         
-        # Проверяем, пришло ли новое сообщение за это время
-        if user_id in self.last_user_messages and self.last_user_messages[user_id]['message'] == user_message:
-            # Нет нового сообщения - обрабатываем текущее
-            # НЕ удаляем из last_user_messages - оставляем для возможного пересылаемого сообщения
+        # Проверяем, пришло ли новое сообщение от этого пользователя за время ожидания
+        new_message = await self.check_for_new_message(user_id, user_message)
+        
+        if new_message is None:
+            # Нового сообщения не пришло - обрабатываем текущее как одиночное
             await self.process_single_message(user_message, update, context)
+            # Удаляем сообщение из хранилища после обработки
+            if user_id in self.last_user_messages:
+                del self.last_user_messages[user_id]
+        else:
+            # Пришло новое сообщение - проверяем, пересылаемое ли оно
+            if hasattr(new_message, 'forward_from') and new_message.forward_from:
+                # Пересылаемое сообщение - обрабатываем пару
+                forwarded_text = new_message.text or new_message.caption or "Пересланное сообщение без текста"
+                await self.handle_message_pair(user_message, forwarded_text, update, context)
+                # Удаляем сообщение из хранилища после обработки пары
+                if user_id in self.last_user_messages:
+                    del self.last_user_messages[user_id]
+            else:
+                # Обычное сообщение - обрабатываем текущее как одиночное
+                await self.process_single_message(user_message, update, context)
+                # Удаляем сообщение из хранилища после обработки
+                if user_id in self.last_user_messages:
+                    del self.last_user_messages[user_id]
     
-    async def check_for_next_message(self, user_id):
-        """Проверяет, есть ли следующее сообщение от пользователя"""
+    async def check_for_new_message(self, user_id, current_message):
+        """Проверяет, пришло ли новое сообщение от пользователя после текущего"""
         try:
             # Получаем последние обновления
             updates = await self.application.bot.get_updates(limit=10)
@@ -154,22 +173,16 @@ class ReminderBot:
                 if (update.message and 
                     update.message.from_user and 
                     update.message.from_user.id == user_id and
-                    update.message.text and
-                    not update.message.forward_from):  # Не пересылаемое сообщение
-                    return update.message.text
-            
+                    update.message.text != current_message):  # Новое сообщение
+                    return update.message
             return None
         except Exception as e:
-            logger.error(f"Ошибка при проверке следующего сообщения: {e}")
+            logger.error(f"Ошибка при проверке нового сообщения: {e}")
             return None
     
     async def handle_message_pair(self, first_message, second_message, update, context):
         """Обрабатывает пару сообщений: поясняющее + пересылаемое"""
         user_id = update.effective_user.id
-        
-        # Удаляем сообщение из last_user_messages, так как мы его обрабатываем
-        if user_id in self.last_user_messages:
-            del self.last_user_messages[user_id]
         
         # Отправляем сообщение о том, что обрабатываем
         processing_message = await update.message.reply_text("🤔 Обрабатываю пару сообщений...")
@@ -251,9 +264,6 @@ class ReminderBot:
         """Обрабатывает одиночное сообщение"""
         user_id = update.effective_user.id
         
-        # НЕ удаляем сообщение из last_user_messages здесь!
-        # Оно будет удалено либо при связывании, либо по таймауту
-        
         # Отправляем сообщение о том, что обрабатываем
         processing_message = await update.message.reply_text("🤔 Обрабатываю ваше сообщение...")
         
@@ -332,10 +342,6 @@ class ReminderBot:
                 )
                 
                 await processing_message.edit_text(success_message, parse_mode='HTML')
-                
-                # Удаляем сообщение из last_user_messages после успешного создания напоминания
-                if user_id in self.last_user_messages and self.last_user_messages[user_id]['message'] == user_message:
-                    del self.last_user_messages[user_id]
             else:
                 await processing_message.edit_text("❌ Ошибка при сохранении напоминания. Попробуйте позже.")
                 
@@ -464,8 +470,8 @@ class ReminderBot:
             logger.error(f"Ошибка при обработке callback: {e}")
             await update.callback_query.answer("❌ Произошла ошибка при обработке действия.")
     
-    async def handle_forwarded_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик пересылаемых сообщений"""
+    # async def handle_forwarded_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    #     """Обработчик пересылаемых сообщений"""
         user_id = update.effective_user.id
         forwarded_message = update.message
         
