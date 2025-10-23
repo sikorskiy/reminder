@@ -9,3 +9,5 @@ apscheduler
 pytz
 openai
 python-telegram-bot
+requests
+pydub
