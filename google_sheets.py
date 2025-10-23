@@ -99,6 +99,7 @@ class GoogleSheetsReminder:
             # Если datetime_str None, сохраняем пустую строку
             datetime_value = datetime_str if datetime_str is not None else ''
             new_row = [datetime_value, text, timezone, 'FALSE', '', comment]
+            print(f"Добавляем строку в Google Sheets: {new_row}")
             self.ws.append_row(new_row)
             
             # Получаем номер последней добавленной строки

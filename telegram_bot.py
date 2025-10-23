@@ -37,7 +37,7 @@ class ReminderBot:
         self.last_user_messages = {}  # {user_id: {'message': text, 'timestamp': time, 'update': update_obj}}
         
         # Таймаут для связывания сообщений (в секундах)
-        self.MESSAGE_LINK_TIMEOUT = 5  # 5 секунд
+        self.MESSAGE_LINK_TIMEOUT = 10  # 10 секунд
         
         # Добавляем обработчики
         self.application.add_handler(CommandHandler("start", self.start_command))
@@ -147,12 +147,9 @@ class ReminderBot:
             if user_id in self.last_user_messages:
                 del self.last_user_messages[user_id]
         else:
-            # Пришло новое сообщение - обрабатываем текущее как одиночное
-            # (пересылаемые сообщения обрабатываются отдельным обработчиком)
-            await self.process_single_message(user_message, update, context)
-            # Удаляем сообщение из хранилища после обработки
-            if user_id in self.last_user_messages:
-                del self.last_user_messages[user_id]
+            # Пришло новое сообщение - НЕ обрабатываем текущее здесь
+            # Оно будет обработано в handle_forwarded_only или останется в last_user_messages
+            logger.info(f"Обнаружено новое сообщение от пользователя {user_id}, оставляем текущее в last_user_messages")
     
     async def check_for_new_message(self, user_id, current_message):
         """Проверяет, пришло ли новое сообщение от пользователя после текущего"""
@@ -181,15 +178,18 @@ class ReminderBot:
         
         # Получаем текст пересылаемого сообщения
         forwarded_text = forwarded_message.text or forwarded_message.caption or "Пересланное сообщение без текста"
+        logger.info(f"Пересылаемое сообщение: text='{forwarded_message.text}', caption='{forwarded_message.caption}', итоговый текст='{forwarded_text}'")
         
         # Проверяем, есть ли недавнее сообщение от этого пользователя
         if user_id in self.last_user_messages:
             import time
             last_msg_data = self.last_user_messages[user_id]
             time_diff = time.time() - last_msg_data['timestamp']
+            logger.info(f"Найдено сообщение в last_user_messages: '{last_msg_data['message']}', время разницы: {time_diff:.2f}с, таймаут: {self.MESSAGE_LINK_TIMEOUT}с")
             
             # Если прошло меньше таймаута - связываем сообщения
             if time_diff < self.MESSAGE_LINK_TIMEOUT:
+                logger.info(f"Связываем сообщения: первое='{last_msg_data['message']}', второе='{forwarded_text}'")
                 # Обрабатываем пару сообщений
                 await self.handle_message_pair(
                     last_msg_data['message'], 
@@ -201,6 +201,10 @@ class ReminderBot:
                 if user_id in self.last_user_messages:
                     del self.last_user_messages[user_id]
                 return
+            else:
+                logger.info(f"Сообщение слишком старое: {time_diff:.2f}с > {self.MESSAGE_LINK_TIMEOUT}с")
+        else:
+            logger.info(f"Нет сообщений в last_user_messages для пользователя {user_id}")
         
         # Нет недавнего сообщения - НЕ обрабатываем пересылаемое как напоминание
         # Просто игнорируем его
