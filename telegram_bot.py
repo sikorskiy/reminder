@@ -172,18 +172,16 @@ class ReminderBot:
         
         # Делаем паузу, чтобы дать шанс пересланному сообщению прийти и сцепиться
         await asyncio.sleep(1)
-
-        # Если за это время пересылки не было (handle_forwarded_only бы удалил запись),
-        # то запись пользователя всё ещё в буфере и равна текущему сообщению —
-        # обрабатываем как одиночное и очищаем буфер
-        if user_id in self.last_user_messages and self.last_user_messages[user_id]['message'] == user_message:
+        
+        # Если буфер НЕ пуст — значит, пересылки не было и нужно обработать как одиночное
+        # Если буфер пуст — значит, пересылка сцепилась и запись удалена в handle_forwarded_only
+        if self.last_user_messages:
             await self.process_single_message(user_message, update, context)
-            del self.last_user_messages[user_id]
+            # Безопасно удаляем запись этого пользователя из буфера
+            self.last_user_messages.pop(user_id, None)
         else:
-            # Пара уже собрана и обработается/обработалась в handle_forwarded_only
-            logger.info(
-                f"Сообщение пользователя {user_id} не обрабатываем отдельно — ожидаем/обработали сцепку"
-            )
+            # Буфер пуст — значит, сцепка произошла, сообщение обработается в handle_forwarded_only
+            logger.info(f"Буфер пуст — сцепка произошла для {user_id}")
     
     async def check_for_new_message(self, user_id, current_message):
         """
