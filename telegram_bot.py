@@ -50,6 +50,28 @@ class ReminderBot:
         # Обработчик для inline-кнопок
         self.application.add_handler(CallbackQueryHandler(self.handle_callback_query))
     
+    def _build_forwarded_gpt_input(self, forwarded_text: str) -> str:
+        """Готовит обогащённый ввод для GPT по пересланному сообщению."""
+        return (
+            "Преобразуй пересланный текст ниже в короткую и конкретную формулировку задачи "
+            "для напоминания (без слов 'напомни', только суть действия). Если в тексте есть время/дату — "
+            "используй их. Если времени нет — верни datetime: null. Текст пересланного: "
+            f"{forwarded_text}"
+        )
+
+    def _extract_and_validate(self, text: str):
+        """
+        Унифицированный вызов GPT-извлечения и последующей валидации.
+        Возвращает кортеж (reminder_info | None, error_message | "").
+        """
+        reminder_info = self.message_processor.extract_reminder_info(text)
+        if reminder_info is None:
+            return None, "Не удалось распознать напоминание"
+        is_valid, error_message = self.message_processor.validate_reminder_info(reminder_info)
+        if not is_valid:
+            return None, error_message
+        return reminder_info, ""
+
     def cleanup_expired_messages(self):
         """Очищает устаревшие последние сообщения"""
         import time
@@ -212,32 +234,52 @@ class ReminderBot:
         processing_message = await update.message.reply_text("📎 Обрабатываю пересылаемое сообщение...")
         
         try:
-            # Извлекаем информацию о напоминании из ТЕКСТА ПЕРЕСЛАННОГО
-            reminder_info = self.message_processor.extract_reminder_info(forwarded_text)
-            
-            if reminder_info is None:
+            # Готовим ввод и извлекаем через общий метод
+            gpt_input = self._build_forwarded_gpt_input(forwarded_text)
+            reminder_info, err = self._extract_and_validate(gpt_input)
+            if not reminder_info:
                 await processing_message.edit_text(
-                    f"❌ Не удалось распознать напоминание в пересылаемом сообщении:\n<i>{forwarded_text}</i>",
+                    (f"❌ Не удалось распознать напоминание в пересылаемом сообщении:\n<i>{forwarded_text}</i>"
+                     if err == "Не удалось распознать напоминание" else
+                     f"🤔 <b>Не удалось создать напоминание</b>\n\n<i>Причина:</i> {err}"),
                     parse_mode='HTML'
                 )
                 return
             
-            # Валидируем
-            is_valid, error_message = self.message_processor.validate_reminder_info(reminder_info)
-            if not is_valid:
-                logger.warning(f"Ошибка валидации для пользователя {user_id}: {error_message}")
-                await processing_message.edit_text(
-                    f"🤔 <b>Не удалось создать напоминание</b>\n\n<i>Причина:</i> {error_message}",
-                    parse_mode='HTML'
-                )
-                return
-            
-            # Сохраняем: текст из reminder_info, а ПОЛНЫЙ пересланный — в comment (6 столбец)
+            # Определяем источник пересылки для комментария
+            def _format_forward_origin(msg):
+                origin = getattr(msg, 'forward_origin', None)
+                try:
+                    # MessageOriginUser
+                    sender_user = getattr(origin, 'sender_user', None)
+                    if sender_user:
+                        name = " ".join(filter(None, [sender_user.first_name, sender_user.last_name]))
+                        username = f"@{sender_user.username}" if getattr(sender_user, 'username', None) else ""
+                        return f"Пользователь: {name or username or sender_user.id}"
+                    # MessageOriginChat
+                    sender_chat = getattr(origin, 'sender_chat', None)
+                    if sender_chat and getattr(sender_chat, 'title', None):
+                        return f"Чат: {sender_chat.title}"
+                    # MessageOriginChannel
+                    channel_chat = getattr(origin, 'chat', None)
+                    if channel_chat and getattr(channel_chat, 'title', None):
+                        return f"Канал: {channel_chat.title}"
+                    # Hidden user name
+                    hidden_name = getattr(origin, 'sender_user_name', None)
+                    if hidden_name:
+                        return f"Пользователь: {hidden_name}"
+                except Exception:
+                    pass
+                return "Источник неизвестен"
+
+            forward_from_str = _format_forward_origin(forwarded_message)
+
+            # Сохраняем: текст из reminder_info, а ПОЛНЫЙ пересланный + источник — в comment (6 столбец)
             row_number = self.google_sheets.add_reminder(
                 datetime_str=reminder_info.get('datetime'),
                 text=reminder_info['text'],
                 timezone=reminder_info.get('timezone', 'Europe/Moscow'),
-                comment=forwarded_text
+                comment=f"От: {forward_from_str}\n\n{forwarded_text}"
             )
             
             if row_number:
@@ -259,13 +301,14 @@ class ReminderBot:
                     dt = datetime.strptime(reminder_info['datetime'], '%Y-%m-%d %H:%M:%S')
                     formatted_time = dt.strftime('%d.%m.%Y в %H:%M')
                     time_info = f"⏰ <b>Время:</b> {formatted_time}\n🌍 <b>Часовой пояс:</b> {timezone}\n\n🔔 Вы получите уведомление в указанное время."
-                    table_info = f"<code>{reminder_info['datetime']} | {text} | {timezone} | FALSE | | {forwarded_text[:50]}...</code>"
+                    table_info = f"<code>{reminder_info['datetime']} | {text} | {timezone} | FALSE | | От: {forward_from_str} | {forwarded_text[:50]}...</code>"
                 else:
                     time_info = "⚠️ <b>Время не указано</b> - напоминание создано без даты и времени"
-                    table_info = f"<code> | {text} | {timezone} | FALSE | | {forwarded_text[:50]}...</code>"
+                    table_info = f"<code> | {text} | {timezone} | FALSE | | От: {forward_from_str} | {forwarded_text[:50]}...</code>"
                 
                 success_message = (
                     f"✅ <b>Напоминание добавлено из пересылаемого сообщения!</b>\n\n"
+                    f"👤 <b>Источник:</b> {forward_from_str}\n"
                     f"📎 <b>Пересланное сообщение:</b> {forwarded_text[:100]}{'...' if len(forwarded_text) > 100 else ''}\n\n"
                     f"📝 <b>Текст напоминания:</b> {text}\n"
                     f"{time_info}\n\n"
@@ -290,23 +333,14 @@ class ReminderBot:
         processing_message = await update.message.reply_text("🤔 Обрабатываю пару сообщений...")
         
         try:
-            # Извлекаем информацию о напоминании из первого сообщения
-            reminder_info = self.message_processor.extract_reminder_info(first_message)
-            
-            if reminder_info is None:
+            # Извлекаем информацию о напоминании из первого сообщения (общий метод)
+            reminder_info, err = self._extract_and_validate(first_message)
+            if not reminder_info:
                 await processing_message.edit_text(
-                    "❌ Не удалось распознать напоминание в первом сообщении.\n\n"
-                    "Попробуйте указать время более четко."
-                )
-                return
-                
-            # Валидируем информацию
-            is_valid, error_message = self.message_processor.validate_reminder_info(reminder_info)
-            
-            if not is_valid:
-                await processing_message.edit_text(
-                    f"🤔 <b>Не удалось создать напоминание</b>\n\n"
-                    f"<i>Причина:</i> {error_message}"
+                    ("❌ Не удалось распознать напоминание в первом сообщении.\n\nПопробуйте указать время более четко."
+                     if err == "Не удалось распознать напоминание" else
+                     f"🤔 <b>Не удалось создать напоминание</b>\n\n<i>Причина:</i> {err}"),
+                    parse_mode='HTML'
                 )
                 return
                 
@@ -371,34 +405,16 @@ class ReminderBot:
         processing_message = await update.message.reply_text("🤔 Обрабатываю ваше сообщение...")
         
         try:
-            # Извлекаем информацию о напоминании с помощью ChatGPT
-            reminder_info = self.message_processor.extract_reminder_info(user_message)
-            
-            if reminder_info is None:
+            # Унифицированное извлечение + валидация
+            reminder_info, err = self._extract_and_validate(user_message)
+            if not reminder_info:
                 await processing_message.edit_text(
-                    "❌ Не удалось распознать напоминание в вашем сообщении.\n\n"
-                    "Попробуйте указать время более четко, например:\n"
-                    "• \"Напомни мне завтра в 15:00 о встрече\"\n"
-                    "• \"Купить хлеб через 2 часа\""
-                )
-                return
-                
-            # Валидируем информацию
-            is_valid, error_message = self.message_processor.validate_reminder_info(reminder_info)
-            
-            if not is_valid:
-                logger.warning(f"Ошибка валидации для пользователя {user_id}: {error_message}")
-                logger.warning(f"Данные напоминания: {reminder_info}")
-                await processing_message.edit_text(
-                    f"🤔 <b>Не удалось создать напоминание</b>\n\n"
-                    f"<i>Причина:</i> {error_message}\n\n"
-                    f"💡 <b>Как правильно создать напоминание:</b>\n"
-                    f"• \"Напомни мне завтра в 15:00 о встрече\"\n"
-                    f"• \"Купить хлеб через 2 часа\"\n"
-                    f"• \"Позвонить маме в субботу в 10 утра\"\n"
-                    f"• \"Сдать отчет в пятницу до 18:00\"\n"
-                    f"• \"Напомни про встречу\" (через 1 час)\n\n"
-                    f"🎤 <i>Также можно отправить голосовое сообщение!</i>",
+                    ("❌ Не удалось распознать напоминание в вашем сообщении.\n\n"
+                     "Попробуйте указать время более четко, например:\n"
+                     "• \"Напомни мне завтра в 15:00 о встрече\"\n"
+                     "• \"Купить хлеб через 2 часа\""
+                     if err == "Не удалось распознать напоминание" else
+                     f"🤔 <b>Не удалось создать напоминание</b>\n\n<i>Причина:</i> {err}"),
                     parse_mode='HTML'
                 )
                 return
@@ -481,35 +497,16 @@ class ReminderBot:
             # Обновляем сообщение о распознанном тексте
             await processing_message.edit_text(f"🎤 <b>Распознанный текст:</b>\n<i>{recognized_text}</i>\n\n🤔 Обрабатываю напоминание...", parse_mode='HTML')
             
-            # Извлекаем информацию о напоминании с помощью ChatGPT
-            reminder_info = self.message_processor.extract_reminder_info(recognized_text)
-            
-            if reminder_info is None:
+            # Унифицированное извлечение + валидация
+            reminder_info, err = self._extract_and_validate(recognized_text)
+            if not reminder_info:
                 await processing_message.edit_text(
-                    f"❌ Не удалось распознать напоминание в тексте:\n<i>{recognized_text}</i>\n\n"
-                    "Попробуйте указать время более четко, например:\n"
-                    "• \"Напомни мне завтра в 15:00 о встрече\"\n"
-                    "• \"Купить хлеб через 2 часа\"",
-                    parse_mode='HTML'
-                )
-                return
-                
-            # Валидируем информацию
-            is_valid, error_message = self.message_processor.validate_reminder_info(reminder_info)
-            
-            if not is_valid:
-                logger.warning(f"Ошибка валидации для пользователя {user_id}: {error_message}")
-                logger.warning(f"Данные напоминания: {reminder_info}")
-                await processing_message.edit_text(
-                    f"🤔 <b>Не удалось создать напоминание</b>\n\n"
-                    f"<i>Причина:</i> {error_message}\n\n"
-                    f"💡 <b>Как правильно создать напоминание:</b>\n"
-                    f"• \"Напомни мне завтра в 15:00 о встрече\"\n"
-                    f"• \"Купить хлеб через 2 часа\"\n"
-                    f"• \"Позвонить маме в субботу в 10 утра\"\n"
-                    f"• \"Сдать отчет в пятницу до 18:00\"\n"
-                    f"• \"Напомни про встречу\" (через 1 час)\n\n"
-                    f"🎤 <i>Также можно отправить голосовое сообщение!</i>",
+                    (f"❌ Не удалось распознать напоминание в тексте:\n<i>{recognized_text}</i>\n\n"
+                     "Попробуйте указать время более четко, например:\n"
+                     "• \"Напомни мне завтра в 15:00 о встрече\"\n"
+                     "• \"Купить хлеб через 2 часа\""
+                     if err == "Не удалось распознать напоминание" else
+                     f"🤔 <b>Не удалось создать напоминание</b>\n\n<i>Причина:</i> {err}"),
                     parse_mode='HTML'
                 )
                 return
