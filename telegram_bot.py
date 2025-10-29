@@ -37,16 +37,15 @@ class ReminderBot:
         self.last_user_messages = {}  # {user_id: {'message': text, 'timestamp': time, 'update': update_obj}}
         
         # Таймаут для связывания сообщений (в секундах)
-        self.MESSAGE_LINK_TIMEOUT = 10  # 10 секунд
+        self.MESSAGE_LINK_TIMEOUT = 2  # 2 секунды
         
         # Добавляем обработчики
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("help", self.help_command))
         self.application.add_handler(CommandHandler("buttons", self.buttons_command))
-        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.FORWARDED, self.handle_message))
+        # Единый обработчик для всех текстовых сообщений (обычных и пересланных)
+        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_unified_message))
         self.application.add_handler(MessageHandler(filters.VOICE, self.handle_voice_message))
-        # Обработчик для пересылаемых сообщений - только для связывания с предыдущими
-        self.application.add_handler(MessageHandler(filters.FORWARDED, self.handle_forwarded_only))
         # Обработчик для inline-кнопок
         self.application.add_handler(CallbackQueryHandler(self.handle_callback_query))
     
@@ -85,7 +84,7 @@ class ReminderBot:
                 return second, ""
             return None, err2
         return None, error_message
-
+    
     def cleanup_expired_messages(self):
         """Очищает устаревшие последние сообщения"""
         import time
@@ -151,92 +150,92 @@ class ReminderBot:
         
         await update.message.reply_text(help_text, parse_mode='HTML')
         
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик текстовых сообщений"""
-        user_message = update.message.text
-        user_id = update.effective_user.id
+    async def handle_unified_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Единый обработчик всех текстовых сообщений (обычных и пересланных).
         
-        logger.info(f"Получено сообщение от пользователя {user_id}: {user_message}")
+        Логика:
+        1. Сохраняет сообщение в буфер
+        2. Ждёт 2 секунды
+        3. Если пришло пересланное - обрабатывает пару
+        4. Если не пришло - обрабатывает как одиночное
+        """
+        user_id = update.effective_user.id
+        message = update.message
+        is_forwarded = bool(message.forward_origin)
+        
+        # Получаем текст сообщения
+        message_text = message.text or message.caption or "Сообщение без текста"
+        if is_forwarded:
+            logger.info(f"Получено пересланное сообщение от пользователя {user_id}: {message_text}")
+        else:
+            logger.info(f"Получено обычное сообщение от пользователя {user_id}: {message_text}")
         
         # Очищаем устаревшие сообщения
         self.cleanup_expired_messages()
         
-        # Сохраняем текущее сообщение для возможного связывания со следующим
+        # Проверяем, есть ли уже сообщение в буфере от этого пользователя
+        # (это означает, что пришло второе сообщение в паре)
+        existing_message = self.last_user_messages.get(user_id)
+        
         import time
+        current_time = time.time()
+        
+        # Если есть предыдущее сообщение от этого пользователя и оно не старше 2 секунд
+        if existing_message and (current_time - existing_message['timestamp']) < 2:
+            # Это вторая часть пары!
+            first_is_forwarded = existing_message.get('is_forwarded', False)
+            # Пара: обычное + пересланное (в любом порядке)
+            if (not first_is_forwarded and is_forwarded) or (first_is_forwarded and not is_forwarded):
+                first_message = existing_message['message']
+                second_message = message_text
+                # Если первое было пересланным - меняем порядок
+                if first_is_forwarded:
+                    first_message, second_message = second_message, first_message
+                logger.info(f"Обрабатываем пару: первое='{first_message}', второе='{second_message}'")
+                await self.handle_message_pair(first_message, second_message, existing_message['update'], existing_message['context'])
+                # Очищаем буфер
+                self.last_user_messages.pop(user_id, None)
+                return
+        
+        # Сохраняем сообщение в буфер
         self.last_user_messages[user_id] = {
-            'message': user_message,
-            'timestamp': time.time(),
+            'message': message_text,
+            'is_forwarded': is_forwarded,
+            'timestamp': current_time,
             'update': update,
             'context': context
         }
         
-        # Делаем паузу, чтобы дать шанс пересланному сообщению прийти и сцепиться
-        await asyncio.sleep(1)
+        # Пауза 2 секунды для возможности получения следующего сообщения
+        await asyncio.sleep(2)
         
-        # Если буфер НЕ пуст — значит, пересылки не было и нужно обработать как одиночное
-        # Если буфер пуст — значит, пересылка сцепилась и запись удалена в handle_forwarded_only
-        if self.last_user_messages:
-            await self.process_single_message(user_message, update, context)
-            # Безопасно удаляем запись этого пользователя из буфера
-            self.last_user_messages.pop(user_id, None)
+        # Проверяем, не было ли удалено наше сообщение из буфера (значит, обработалось как пара)
+        if user_id not in self.last_user_messages:
+            logger.info(f"Сообщение {user_id} уже обработано как пара")
+            return
+        
+        # Проверяем, не появилось ли более свежее сообщение от этого пользователя
+        current_data = self.last_user_messages.get(user_id)
+        if current_data and current_data['timestamp'] > current_time:
+            # Появилось более свежее сообщение - значит, наше уже обрабатывается парой
+            logger.info(f"Обнаружено более свежее сообщение - наше уже в паре")
+            return
+        
+        # Не пришло второго сообщения - обрабатываем как одиночное
+        if is_forwarded:
+            await self.process_single_forwarded(update, context, message_text)
         else:
-            # Буфер пуст — значит, сцепка произошла, сообщение обработается в handle_forwarded_only
-            logger.info(f"Буфер пуст — сцепка произошла для {user_id}")
+            await self.process_single_message(message_text, update, context)
+        
+        # Очищаем буфер
+        self.last_user_messages.pop(user_id, None)
     
-    async def check_for_new_message(self, user_id, current_message):
-        """
-        Упрощённая проверка: считаем, что если буфер last_user_messages НЕ пуст,
-        то текущее сообщение потенциально образует пару с последующим пересланным
-        и не должно немедленно обрабатываться как одиночное.
-        """
-        try:
-            has_buffer = bool(self.last_user_messages)
-            logger.info(
-                f"check_for_new_message: has_buffer={has_buffer}, user_id={user_id}"
-            )
-            return update if False else (self.last_user_messages if has_buffer else None)  # type: ignore
-        except Exception as e:
-            logger.error(f"Ошибка при проверке буфера сообщений: {e}")
-            return None
-    
-    async def handle_forwarded_only(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик пересылаемых сообщений - только для связывания с предыдущими"""
+    async def process_single_forwarded(self, update: Update, context: ContextTypes.DEFAULT_TYPE, forwarded_text: str):
+        """Обрабатывает одиночное пересланное сообщение"""
         user_id = update.effective_user.id
         forwarded_message = update.message
         
-        logger.info(f"Получено пересылаемое сообщение от пользователя {user_id}")
-        
-        # Получаем текст пересылаемого сообщения
-        forwarded_text = forwarded_message.text or forwarded_message.caption or "Пересланное сообщение без текста"
-        logger.info(f"Пересылаемое сообщение: text='{forwarded_message.text}', caption='{forwarded_message.caption}', итоговый текст='{forwarded_text}'")
-        
-        # Проверяем, есть ли недавнее сообщение В ПРИНЦИПЕ (без привязки к user_id)
-        if self.last_user_messages:
-            import time
-            # Берем самое свежее сообщение из буфера
-            last_user_id, last_msg_data = max(self.last_user_messages.items(), key=lambda kv: kv[1]['timestamp'])
-            time_diff = time.time() - last_msg_data['timestamp']
-            logger.info(f"Найдено последнее сообщение в last_user_messages (user {last_user_id}): '{last_msg_data['message']}', время разницы: {time_diff:.2f}с, таймаут: {self.MESSAGE_LINK_TIMEOUT}с")
-            
-            # Если прошло меньше таймаута - связываем сообщения
-            if time_diff < self.MESSAGE_LINK_TIMEOUT:
-                logger.info(f"Связываем сообщения: первое='{last_msg_data['message']}', второе='{forwarded_text}'")
-                await self.handle_message_pair(
-                    last_msg_data['message'], 
-                    forwarded_text, 
-                    last_msg_data['update'], 
-                    last_msg_data['context']
-                )
-                # Удаляем связанное сообщение из буфера
-                if last_user_id in self.last_user_messages:
-                    del self.last_user_messages[last_user_id]
-                return
-            else:
-                logger.info(f"Последнее сообщение слишком старое: {time_diff:.2f}с > {self.MESSAGE_LINK_TIMEOUT}с")
-        else:
-            logger.info("Буфер last_user_messages пуст")
-        
-        # Буфер пуст или сообщение устарело — обрабатываем пересылаемое как самостоятельное напоминание
         processing_message = await update.message.reply_text("📎 Обрабатываю пересылаемое сообщение...")
         
         try:
