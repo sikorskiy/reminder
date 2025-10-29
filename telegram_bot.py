@@ -163,7 +163,9 @@ class ReminderBot:
                     update.message.from_user and 
                     update.message.from_user.id == user_id and
                     update.message.text != current_message):  # Новое сообщение
+                    logger.info(f"Найдено новое сообщение в check_for_new_message: text='{update.message.text}', forward_from={update.message.forward_from}")
                     return update.message
+            logger.info(f"Новое сообщение не найдено в check_for_new_message для пользователя {user_id}")
             return None
         except Exception as e:
             logger.error(f"Ошибка при проверке нового сообщения: {e}")
@@ -180,35 +182,105 @@ class ReminderBot:
         forwarded_text = forwarded_message.text or forwarded_message.caption or "Пересланное сообщение без текста"
         logger.info(f"Пересылаемое сообщение: text='{forwarded_message.text}', caption='{forwarded_message.caption}', итоговый текст='{forwarded_text}'")
         
-        # Проверяем, есть ли недавнее сообщение от этого пользователя
-        if user_id in self.last_user_messages:
+        # Проверяем, есть ли недавнее сообщение В ПРИНЦИПЕ (без привязки к user_id)
+        if self.last_user_messages:
             import time
-            last_msg_data = self.last_user_messages[user_id]
+            # Берем самое свежее сообщение из буфера
+            last_user_id, last_msg_data = max(self.last_user_messages.items(), key=lambda kv: kv[1]['timestamp'])
             time_diff = time.time() - last_msg_data['timestamp']
-            logger.info(f"Найдено сообщение в last_user_messages: '{last_msg_data['message']}', время разницы: {time_diff:.2f}с, таймаут: {self.MESSAGE_LINK_TIMEOUT}с")
+            logger.info(f"Найдено последнее сообщение в last_user_messages (user {last_user_id}): '{last_msg_data['message']}', время разницы: {time_diff:.2f}с, таймаут: {self.MESSAGE_LINK_TIMEOUT}с")
             
             # Если прошло меньше таймаута - связываем сообщения
             if time_diff < self.MESSAGE_LINK_TIMEOUT:
                 logger.info(f"Связываем сообщения: первое='{last_msg_data['message']}', второе='{forwarded_text}'")
-                # Обрабатываем пару сообщений
                 await self.handle_message_pair(
-                    last_msg_data['message'], 
-                    forwarded_text, 
-                    last_msg_data['update'], 
+                    last_msg_data['message'],
+                    forwarded_text,
+                    last_msg_data['update'],
                     last_msg_data['context']
                 )
-                # Удаляем сообщение из хранилища после обработки пары
-                if user_id in self.last_user_messages:
-                    del self.last_user_messages[user_id]
+                # Удаляем связанное сообщение из буфера
+                if last_user_id in self.last_user_messages:
+                    del self.last_user_messages[last_user_id]
                 return
             else:
-                logger.info(f"Сообщение слишком старое: {time_diff:.2f}с > {self.MESSAGE_LINK_TIMEOUT}с")
+                logger.info(f"Последнее сообщение слишком старое: {time_diff:.2f}с > {self.MESSAGE_LINK_TIMEOUT}с")
         else:
-            logger.info(f"Нет сообщений в last_user_messages для пользователя {user_id}")
+            logger.info("Буфер last_user_messages пуст")
         
-        # Нет недавнего сообщения - НЕ обрабатываем пересылаемое как напоминание
-        # Просто игнорируем его
-        logger.info(f"Пересылаемое сообщение от пользователя {user_id} проигнорировано - нет связанного сообщения")
+        # Буфер пуст или сообщение устарело — обрабатываем пересылаемое как самостоятельное напоминание
+        processing_message = await update.message.reply_text("📎 Обрабатываю пересылаемое сообщение...")
+        
+        try:
+            # Извлекаем информацию о напоминании из ТЕКСТА ПЕРЕСЛАННОГО
+            reminder_info = self.message_processor.extract_reminder_info(forwarded_text)
+            
+            if reminder_info is None:
+                await processing_message.edit_text(
+                    f"❌ Не удалось распознать напоминание в пересылаемом сообщении:\n<i>{forwarded_text}</i>",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Валидируем
+            is_valid, error_message = self.message_processor.validate_reminder_info(reminder_info)
+            if not is_valid:
+                logger.warning(f"Ошибка валидации для пользователя {user_id}: {error_message}")
+                await processing_message.edit_text(
+                    f"🤔 <b>Не удалось создать напоминание</b>\n\n<i>Причина:</i> {error_message}",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Сохраняем: текст из reminder_info, а ПОЛНЫЙ пересланный — в comment (6 столбец)
+            row_number = self.google_sheets.add_reminder(
+                datetime_str=reminder_info.get('datetime'),
+                text=reminder_info['text'],
+                timezone=reminder_info.get('timezone', 'Europe/Moscow'),
+                comment=forwarded_text
+            )
+            
+            if row_number:
+                # Сохраняем для inline-кнопок
+                reminder_data = {
+                    'row': row_number,
+                    'datetime': reminder_info.get('datetime'),
+                    'text': reminder_info['text'],
+                    'timezone': reminder_info.get('timezone', 'Europe/Moscow')
+                }
+                self.inline_button_handler.set_last_reminder(user_id, reminder_data)
+                
+                # Формируем ответ
+                from datetime import datetime
+                timezone = reminder_info.get('timezone', 'Europe/Moscow')
+                text = reminder_info['text']
+                
+                if reminder_info.get('datetime'):
+                    dt = datetime.strptime(reminder_info['datetime'], '%Y-%m-%d %H:%M:%S')
+                    formatted_time = dt.strftime('%d.%m.%Y в %H:%M')
+                    time_info = f"⏰ <b>Время:</b> {formatted_time}\n🌍 <b>Часовой пояс:</b> {timezone}\n\n🔔 Вы получите уведомление в указанное время."
+                    table_info = f"<code>{reminder_info['datetime']} | {text} | {timezone} | FALSE | | {forwarded_text[:50]}...</code>"
+                else:
+                    time_info = "⚠️ <b>Время не указано</b> - напоминание создано без даты и времени"
+                    table_info = f"<code> | {text} | {timezone} | FALSE | | {forwarded_text[:50]}...</code>"
+                
+                success_message = (
+                    f"✅ <b>Напоминание добавлено из пересылаемого сообщения!</b>\n\n"
+                    f"📎 <b>Пересланное сообщение:</b> {forwarded_text[:100]}{'...' if len(forwarded_text) > 100 else ''}\n\n"
+                    f"📝 <b>Текст напоминания:</b> {text}\n"
+                    f"{time_info}\n\n"
+                    f"📊 <i>Строка в таблице:</i>\n"
+                    f"{table_info}"
+                )
+                await processing_message.edit_text(success_message, parse_mode='HTML')
+            else:
+                await processing_message.edit_text("❌ Ошибка при сохранении напоминания. Попробуйте позже.")
+        
+        except Exception as e:
+            logger.error(f"Ошибка при самостоятельной обработке пересылаемого сообщения: {e}")
+            await processing_message.edit_text(
+                "❌ Произошла ошибка при обработке пересылаемого сообщения. Попробуйте позже."
+            )
     
     async def handle_message_pair(self, first_message, second_message, update, context):
         """Обрабатывает пару сообщений: поясняющее + пересылаемое"""
