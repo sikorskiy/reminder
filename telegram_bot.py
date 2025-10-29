@@ -188,23 +188,19 @@ class ReminderBot:
             logger.info(f"Обнаружено новое сообщение от пользователя {user_id}, оставляем текущее в last_user_messages")
     
     async def check_for_new_message(self, user_id, current_message):
-        """Проверяет, пришло ли новое сообщение от пользователя после текущего"""
+        """
+        Упрощённая проверка: считаем, что если буфер last_user_messages НЕ пуст,
+        то текущее сообщение потенциально образует пару с последующим пересланным
+        и не должно немедленно обрабатываться как одиночное.
+        """
         try:
-            # Получаем последние обновления
-            updates = await self.application.bot.get_updates(limit=10)
-            
-            # Ищем сообщения от того же пользователя, которые пришли после текущего
-            for update in updates:
-                if (update.message and 
-                    update.message.from_user and 
-                    update.message.from_user.id == user_id and
-                    update.message.text != current_message):  # Новое сообщение
-                    logger.info(f"Найдено новое сообщение в check_for_new_message: text='{update.message.text}', forward_from={update.message.forward_from}")
-                    return update.message
-            logger.info(f"Новое сообщение не найдено в check_for_new_message для пользователя {user_id}")
-            return None
+            has_buffer = bool(self.last_user_messages)
+            logger.info(
+                f"check_for_new_message: has_buffer={has_buffer}, user_id={user_id}"
+            )
+            return update if False else (self.last_user_messages if has_buffer else None)  # type: ignore
         except Exception as e:
-            logger.error(f"Ошибка при проверке нового сообщения: {e}")
+            logger.error(f"Ошибка при проверке буфера сообщений: {e}")
             return None
     
     async def handle_forwarded_only(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
