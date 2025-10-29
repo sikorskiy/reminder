@@ -170,22 +170,20 @@ class ReminderBot:
             'context': context
         }
         
-        # Делаем паузу, чтобы проверить, придет ли еще сообщение
+        # Делаем паузу, чтобы дать шанс пересланному сообщению прийти и сцепиться
         await asyncio.sleep(1)
-        
-        # Проверяем, пришло ли новое сообщение от этого пользователя за время ожидания
-        new_message = await self.check_for_new_message(user_id, user_message)
-        
-        if new_message is None:
-            # Нового сообщения не пришло - обрабатываем текущее как одиночное
+
+        # Если за это время пересылки не было (handle_forwarded_only бы удалил запись),
+        # то запись пользователя всё ещё в буфере и равна текущему сообщению —
+        # обрабатываем как одиночное и очищаем буфер
+        if user_id in self.last_user_messages and self.last_user_messages[user_id]['message'] == user_message:
             await self.process_single_message(user_message, update, context)
-            # Удаляем сообщение из хранилища после обработки
-            if user_id in self.last_user_messages:
-                del self.last_user_messages[user_id]
+            del self.last_user_messages[user_id]
         else:
-            # Пришло новое сообщение - НЕ обрабатываем текущее здесь
-            # Оно будет обработано в handle_forwarded_only или останется в last_user_messages
-            logger.info(f"Обнаружено новое сообщение от пользователя {user_id}, оставляем текущее в last_user_messages")
+            # Пара уже собрана и обработается/обработалась в handle_forwarded_only
+            logger.info(
+                f"Сообщение пользователя {user_id} не обрабатываем отдельно — ожидаем/обработали сцепку"
+            )
     
     async def check_for_new_message(self, user_id, current_message):
         """
